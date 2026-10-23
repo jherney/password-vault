@@ -105,4 +105,4 @@ The GUI tests need a display. Without one they're skipped; on a headless machine
 
 ## License
 
-No license has been chosen yet.
+MIT License. See [LICENSE](LICENSE).
