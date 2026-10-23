@@ -1,0 +1,2 @@
+pykeepass==4.2.0
+cryptography  # only for converting old .pwv vaults
