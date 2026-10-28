@@ -731,12 +731,13 @@ def copy_and_report(entry) -> None:
 def cmd_init(args):
     if args.vault.exists():
         sys.exit(f"error: a vault already exists at {args.vault}")
-    if args.new_keyfile:
-        generate_keyfile(args.new_keyfile)
-        print(f"Created key file {args.new_keyfile}. Back it up: without it the vault can't be opened.")
     keyfile = args.new_keyfile or args.keyfile
     print("Choose a master password. It can't be recovered if you forget it.")
-    Vault.create(args.vault, prompt_new_master(keyfile), keyfile).save()
+    password = prompt_new_master(keyfile)
+    if args.new_keyfile:  # only now, so aborting at the prompt leaves no stray key file
+        generate_keyfile(args.new_keyfile)
+        print(f"Created key file {args.new_keyfile}. Back it up: without it the vault can't be opened.")
+    Vault.create(args.vault, password, keyfile).save()
     print(f"Created encrypted KeePass vault at {args.vault}")
 
 
@@ -860,10 +861,11 @@ def cmd_generate(args):
 def cmd_passwd(args):
     vault = unlock(args)
     keyfile = None if args.no_keyfile else (args.new_keyfile or args.keyfile)
-    if args.new_keyfile:
+    password = prompt_new_master(keyfile)
+    if args.new_keyfile:  # only now, so aborting at the prompt leaves no stray key file
         generate_keyfile(args.new_keyfile)
         print(f"Created key file {args.new_keyfile}. Back it up: without it the vault can't be opened.")
-    vault.rekey(prompt_new_master(keyfile), keyfile)
+    vault.rekey(password, keyfile)
     vault.save()
     print("Master key changed." + (f" The vault now also needs {keyfile}." if keyfile else ""))
 
