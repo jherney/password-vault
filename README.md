@@ -49,7 +49,7 @@ The default vault is `~/.local/share/pwvault/vault.kdbx`. Override it with `--va
 | `init [--new-keyfile PATH]` | Create a vault, optionally with a new key file |
 | `migrate [OLD]` | Convert an old-format `.pwv` vault to KeePass format; the old file is left untouched |
 | `import CSV [--shred]` | Import a CSV export; `--shred` deletes the CSV afterwards |
-| `export {csv,html,xml,txt} OUT` | Export every entry. **The output is not encrypted.** |
+| `export {csv,html,xml,txt} OUT [--raw]` | Export every entry. **The output is not encrypted.** `--raw` writes CSV values exactly (see below) |
 | `list [QUERY] [--group PATH]` | List entries, hiding passwords |
 | `get QUERY [--show]` | Copy a password to the clipboard, or print it with `--show` |
 | `add [-g] [-l LEN] [--group PATH]` | Add an entry; `-g` generates the password |
@@ -90,6 +90,8 @@ After 5 minutes without input, the vault locks. An open edit dialog holds the va
 - Vaults are only opened with `lxml` 5.0 or newer. Older `lxml` expands external XML entities, which a crafted vault could use to copy a local file into itself on the next save.
 - Attachment data is removed from the file once no entry or history version uses it.
 - Exports and CSV imports are plaintext. Delete them when you're done. `import --shred` overwrites the file before deleting it (it refuses symlinks, so it can't overwrite some other file), but on SSDs and copy-on-write filesystems (such as Fedora's default btrfs) old copies can survive. Full-disk encryption is what protects that data.
+- CSV exports are safe to open in a spreadsheet app: a value starting with `=`, `+`, `-` or `@` gets a leading `'`, so a hostile entry can't run as a formula (for example, one that sends every password to a website). pwvault's own import removes the prefix again. To move to another password manager, use `export csv --raw` (or *CSV (raw)* in the GUI), which keeps values exact and shouldn't be opened in a spreadsheet.
+- New key files are created in one step that fails if anything already exists at that path, so an existing key file (or a symlink) is never overwritten.
 - Attachment names come from the vault file, so when you save one the GUI suggests only its plain file name, never a path.
 - On Wayland, copied passwords are marked as sensitive so clipboard managers skip them (wl-clipboard 2.2+). X11 has no such hint, so a clipboard manager there may keep a copy.
 - What pwvault can't protect against: malware running as your user (it can read the clipboard, log keystrokes or read process memory), and a weak master password on a vault file someone has copied.

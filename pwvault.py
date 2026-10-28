@@ -40,7 +40,7 @@ from pykeepass import PyKeePass
 from pykeepass.exceptions import CredentialsError, PayloadChecksumError
 from pykeepass.pykeepass import BLANK_DATABASE_LOCATION, BLANK_DATABASE_PASSWORD
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 DATA_DIR = Path.home() / ".local/share/pwvault"
 DEFAULT_VAULT = Path(os.environ.get("PWVAULT_PATH", DATA_DIR / "vault.kdbx"))
@@ -98,9 +98,21 @@ def check_master_key(password: str, keyfile) -> None:
 
 
 def generate_keyfile(path: Path) -> None:
-    if path.exists():
+    """Create a random key file. O_EXCL checks and creates in one step, so a file (or symlink)
+    that appears at path meanwhile is never overwritten; it also works on FAT USB sticks."""
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
         raise VaultError(f"{path} already exists")
-    write_private(path, secrets.token_bytes(KEYFILE_LEN))
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(secrets.token_bytes(KEYFILE_LEN))
+            f.flush()
+            os.fsync(f.fileno())
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
 
 
 def _read_variant_dict(data: bytes) -> dict:
@@ -312,8 +324,11 @@ class Vault:
         return list((group or self.root).entries)
 
     def add_entry(self, group, title, username, password, url="", notes="", expiry=None):
-        entry = self.kp.add_entry(group or self.root, title, username or "", password or "",
+        # pykeepass puts title and username into an XPath duplicate check (pointless with
+        # force_creation) that breaks on a double quote, so set them afterwards.
+        entry = self.kp.add_entry(group or self.root, "", "", password or "",
                                   url=url or None, notes=notes or None, force_creation=True)
+        entry.title, entry.username = title or "", username or ""
         set_expiry(entry, expiry)
         return entry
 
@@ -494,6 +509,7 @@ def read_csv_export(path: Path) -> list:
 def _read_csv_export(path: Path) -> list:
     with open(path, newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
+        ours = tuple(reader.fieldnames or ()) == EXPORT_HEADER  # may be spreadsheet-escaped
         cols = {c.strip().lower(): c for c in (reader.fieldnames or [])}
         mapping = {field: next((cols[a] for a in aliases if a in cols), None)
                    for field, aliases in CSV_COLUMNS.items()}
@@ -503,6 +519,8 @@ def _read_csv_export(path: Path) -> list:
         out = []
         for row in reader:
             rec = {k: (row.get(col) or "") if col else "" for k, col in mapping.items()}
+            if ours:
+                rec = {k: spreadsheet_unescape(v) for k, v in rec.items()}
             for k in ("title", "url", "username", "notes", "group"):
                 rec[k] = rec[k].strip()
             if not any(rec[k] for k in ("title", "url", "username", "password")):
@@ -560,20 +578,39 @@ def shred(path: Path) -> None:
 
 EXPORT_FORMATS = ("csv", "html", "xml", "txt")
 EXPORT_WARNING = "Exported files are NOT encrypted — delete them as soon as you're done."
+EXPORT_HEADER = ("Group", "Title", "Username", "Password", "URL", "Notes", "Last Modified", "Created")
+# Spreadsheet apps run a cell that starts with one of these as a formula, so an entry from a
+# hostile vault or CSV could make LibreOffice or Excel send the other cells (every password) to
+# a web server when you open the export.
+FORMULA_START = ("=", "+", "-", "@", "\t", "\r")
+CSV_ESCAPE_NOTE = ("Values starting with = + - or @ were prefixed with ' so spreadsheet apps don't run "
+                   "them as formulas. pwvault's import removes the prefix; to move to another password "
+                   "manager, export the CSV in raw form instead.")
 
 
-def export(vault: Vault, path: Path, fmt: str) -> int:
+def spreadsheet_escape(value: str) -> str:
+    """Prefix ' to formula-like values (OWASP's CSV-injection advice). A value that already starts
+    with ' gets one too, so spreadsheet_unescape restores every value exactly."""
+    return "'" + value if value.startswith(FORMULA_START + ("'",)) else value
+
+
+def spreadsheet_unescape(value: str) -> str:
+    return value[1:] if value[:1] == "'" and value[1:].startswith(FORMULA_START + ("'",)) else value
+
+
+def export(vault: Vault, path: Path, fmt: str, raw: bool = False) -> int:
     """Write every entry outside the recycle bin in plain text. Returns the entry count.
-    xml is the full KeePass XML (readable by KeePass's own XML import)."""
+    csv is spreadsheet-safe unless raw (see FORMULA_START); xml is the full KeePass XML
+    (readable by KeePass's own XML import)."""
     entries = [e for e in vault.kp.entries if not vault.in_recycle_bin(e)]
     rows = [(vault.group_path(e.group), e.title or "", e.username or "", e.password or "",
              e.url or "", e.notes or "", fmt_time(e.mtime), fmt_time(e.ctime)) for e in entries]
-    header = ("Group", "Title", "Username", "Password", "URL", "Notes", "Last Modified", "Created")
+    header = EXPORT_HEADER
     if fmt == "csv":  # same columns as KeePassXC's CSV export
         buf = io.StringIO()
         w = csv.writer(buf)
         w.writerow(header)
-        w.writerows(rows)
+        w.writerows(rows if raw else ([spreadsheet_escape(c) for c in r] for r in rows))
         data = buf.getvalue().encode()
     elif fmt == "html":
         cells = lambda r, tag: "".join(f"<{tag}>{html.escape(c)}</{tag}>" for c in r)
@@ -724,8 +761,10 @@ def cmd_import(args):
 
 def cmd_export(args):
     vault = unlock(args)
-    n = export(vault, args.out, args.format)
+    n = export(vault, args.out, args.format, raw=args.raw)
     print(f"Exported {n} entries to {args.out}.\n⚠  {EXPORT_WARNING}")
+    if args.format == "csv" and not args.raw:
+        print(CSV_ESCAPE_NOTE.replace("in raw form", "with --raw"))
 
 
 def cmd_list(args):
@@ -862,6 +901,9 @@ def main():
     p = sub.add_parser("export", help="export entries to an unencrypted file")
     p.add_argument("format", choices=EXPORT_FORMATS)
     p.add_argument("out", type=Path)
+    p.add_argument("--raw", action="store_true",
+                   help="csv: write values exactly, for importing into another password manager "
+                        "(unsafe to open in a spreadsheet app)")
     p.set_defaults(fn=cmd_export)
 
     p = sub.add_parser("list", help="list entries (passwords hidden)")

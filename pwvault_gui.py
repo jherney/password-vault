@@ -982,8 +982,12 @@ class App:
         m.add_command(label="Import CSV…", command=self.import_csv)
         exp = tk.Menu(m, tearoff=0, bg=PANEL, fg=FG, activebackground=ACCENT, activeforeground="#fff")
         for fmt in pwvault.EXPORT_FORMATS:
-            exp.add_command(label=fmt.upper() + ("  (KeePass XML)" if fmt == "xml" else ""),
+            exp.add_command(label=fmt.upper() + {"csv": "  (safe to open in a spreadsheet)",
+                                                 "xml": "  (KeePass XML)"}.get(fmt, ""),
                             command=lambda f=fmt: self.export(f))
+            if fmt == "csv":
+                exp.add_command(label="CSV  (raw, for another password manager)",
+                                command=lambda: self.export("csv", raw=True))
         m.add_cascade(label="Export", menu=exp)
         m.add_separator()
         m.add_command(label="Empty recycle bin…", command=self.empty_bin)
@@ -1007,16 +1011,19 @@ class App:
             self.refresh_groups()
             self.status(f"Permanently deleted {n} item{'s' if n != 1 else ''}.")
 
-    def export(self, fmt):
-        if not messagebox.askokcancel("Export", f"{pwvault.EXPORT_WARNING}\n\nContinue?", icon="warning",
-                                      parent=self.root):
+    def export(self, fmt, raw=False):
+        warning = pwvault.EXPORT_WARNING
+        if raw:
+            warning += ("\n\nRaw CSV keeps every value exactly, so don't open it in a spreadsheet app: "
+                        "a hostile entry could run there as a formula.")
+        if not messagebox.askokcancel("Export", f"{warning}\n\nContinue?", icon="warning", parent=self.root):
             return
         path = filedialog.asksaveasfilename(parent=self.root, title=f"Export as {fmt.upper()}",
                                             initialfile=f"pwvault-export.{fmt}", defaultextension="." + fmt)
         if not path or self.vault is None:
             return
         try:
-            n = pwvault.export(self.vault, Path(path), fmt)
+            n = pwvault.export(self.vault, Path(path), fmt, raw=raw)
         except (VaultError, OSError) as e:
             return messagebox.showerror("Export failed", str(e), parent=self.root)
         self.status(f"Exported {n} entries to {Path(path).name} — delete it when you're done.")

