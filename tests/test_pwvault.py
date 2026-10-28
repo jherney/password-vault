@@ -583,7 +583,9 @@ class MainWindowTests(Base):
     def test_entry_dialog_focuses_title(self):
         dialog = self.gui.EntryDialog(self.app)
         self.app.root.update()
-        self.assertIs(dialog.focus_get(), dialog.title_field)
+        # focus_lastfor, not focus_get: without a window manager (bare Xvfb, Tk 9) the app never
+        # holds keyboard focus, but Tk still records which widget gets it when the dialog activates.
+        self.assertIs(dialog.focus_lastfor(), dialog.title_field)
 
 
 class MigrationTests(Base):
