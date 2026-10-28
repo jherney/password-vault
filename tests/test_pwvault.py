@@ -564,6 +564,22 @@ class MainWindowTests(Base):
             self.assertGreaterEqual(b.winfo_width(), font.measure(text) + 20, text)
             self.assertLessEqual(b.winfo_rootx() + b.winfo_width(), panel.winfo_rootx() + panel.winfo_width(), text)
 
+    def test_revealed_password_stays_left_of_its_buttons(self):
+        # Regression: a long revealed password wrapped at a fixed width and ran under Hide.
+        v = self.app.vault
+        e = v.add_entry(v.root, "Long", "u", "(MzNK?C1CL4wwFnwvy{|7C" * 2)
+        self.app.show_group(v.root, select=e)
+        self.app.root.update()
+        line = next(f for f in self.app.detail.winfo_children() if isinstance(f, self.gui.ttk.Frame)
+                    and any(w.cget("text") == "Show" for w in f.winfo_children() if isinstance(w, self.gui.ttk.Button)))
+        show = next(w for w in line.winfo_children() if isinstance(w, self.gui.ttk.Button) and w.cget("text") == "Show")
+        show.invoke()
+        self.app.root.update()
+        label = next(w for w in line.winfo_children() if isinstance(w, self.gui.ttk.Label))
+        self.assertEqual(label.cget("text"), e.password)
+        self.assertLessEqual(label.winfo_reqwidth(), label.winfo_width())  # text fits what it was given
+        self.assertLessEqual(label.winfo_rootx() + label.winfo_width(), show.winfo_rootx())
+
     def test_entry_dialog_focuses_title(self):
         dialog = self.gui.EntryDialog(self.app)
         self.app.root.update()

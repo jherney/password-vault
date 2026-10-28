@@ -105,7 +105,7 @@ python3 pwvault.py --help
 ## Test
 
 ```bash
-xvfb-run -a python3.12 -m unittest discover -s tests   # 49 tests, ~50 s, GUI included
+xvfb-run -a python3.12 -m unittest discover -s tests   # 50 tests, ~50 s, GUI included
 python3 -m unittest discover -s tests                  # without tkinter: GUI tests skip
 ```
 
