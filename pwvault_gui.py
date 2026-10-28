@@ -889,6 +889,10 @@ class App:
                 btn = ttk.Button(line, text="Show", width=5, command=toggle)
                 btn.pack(side="right", padx=4)
             lbl.pack(side="left", fill="x", expand=True)
+            # Wrap at the width the buttons leave over; a fixed wraplength ran under Show/Copy
+            # when both buttons were present. Tk breaks a long unspaced value (a password) after
+            # the character that crosses the limit, so keep one character's margin.
+            lbl.bind("<Configure>", lambda ev: lbl.configure(wraplength=max(ev.width - 12, 20)))
 
         row("USERNAME", e.username, "username")
         row("PASSWORD", e.password, "password", secret=True)
