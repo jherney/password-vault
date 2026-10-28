@@ -1,5 +1,6 @@
 """Regression tests for pwvault. Run: python3 -m unittest discover -s tests"""
 
+import importlib.util
 import json
 import secrets
 import struct
@@ -125,6 +126,47 @@ class StorageTests(Base):
             with self.assertRaisesRegex(VaultError, "unreasonable"):
                 self.reopen()
 
+    def test_hostile_kdf_work_and_parallelism_rejected(self):
+        # Each value is under the old per-field caps but still means minutes to hours of work
+        # (64 MiB x 600 passes) or one thread per lane (100k lanes).
+        blob = self.new_vault().disk_blob
+        cases = ((b"I", b"\x05", "<Q", 14, 600), (b"P", b"\x04", "<I", 2, 100_000))
+        for key, vtype, fmt, current, value in cases:
+            size = struct.calcsize(fmt)
+            tlv = lambda v: vtype + struct.pack("<I", 1) + key + struct.pack("<I", size) + struct.pack(fmt, v)
+            self.assertEqual(blob.count(tlv(current)), 1)
+            self.path.write_bytes(blob.replace(tlv(current), tlv(value)))
+            with self.subTest(key=key), self.assertRaisesRegex(VaultError, "unreasonable"):
+                self.reopen()
+
+    def test_hostile_aes_kdf_rounds_rejected(self):
+        # KDBX 3 header: signatures, version 3.1, TransformRounds (field 6), end of header.
+        def header(rounds):
+            return (pwvault.KDBX_SIGNATURE + struct.pack("<HH", 1, 3)
+                    + b"\x06" + struct.pack("<H", 8) + struct.pack("<Q", rounds) + b"\x00\x00\x00")
+        pwvault.check_kdf_params(header(6_000_000))
+        with self.assertRaisesRegex(VaultError, "unreasonable"):
+            pwvault.check_kdf_params(header(10**9))
+
+    def test_old_lxml_is_refused(self):
+        # lxml < 5 expands external entities, which a crafted vault could use to read local files.
+        self.new_vault()
+        with patch.object(pwvault.etree, "LXML_VERSION", (4, 9, 3, 0)):
+            with self.assertRaisesRegex(VaultError, "lxml"):
+                self.reopen()
+
+    def test_symlinked_vault_stays_a_symlink(self):
+        # Regression: saving through a symlink (e.g. into a synced folder) replaced the link with a file.
+        real = self.tmp / "sync" / "vault.kdbx"
+        Vault.create(real, PW).save()
+        link = self.tmp / "link.kdbx"
+        link.symlink_to(real)
+        v = Vault.open(link, PW)
+        v.add_entry(v.root, "Via link", "u", "p")
+        v.save()
+        self.assertTrue(link.is_symlink())
+        self.assertEqual([e.title for e in Vault.open(real, PW).kp.entries], ["Via link"])
+
 
 class EntryTests(Base):
     def test_groups(self):
@@ -244,6 +286,27 @@ class ImportExportTests(Base):
         records = pwvault.read_csv_export(self.tmp / "out.csv")  # our CSV re-imports
         self.assertEqual({(r["title"], r["group"]) for r in records}, {("GitHub", "Root"), ("<b>Tag</b>", "Root/Work")})
 
+    def test_unreadable_csv_is_a_clean_error(self):
+        p = self.tmp / "latin1.csv"
+        p.write_bytes("name,url,username,password\nCaf\xe9,,u,p\n".encode("latin-1"))
+        with self.assertRaisesRegex(VaultError, "UTF-8"):
+            pwvault.read_csv_export(p)
+
+    def test_shred_overwrites_and_deletes(self):
+        p = self.write_csv("name,password\nx,y\n")
+        pwvault.shred(p)
+        self.assertFalse(p.exists())
+
+    def test_shred_refuses_symlinks(self):
+        # Overwriting through a link would destroy the file it points at.
+        target = self.tmp / "important.txt"
+        target.write_text("keep me")
+        link = self.tmp / "export.csv"
+        link.symlink_to(target)
+        with self.assertRaises(VaultError):
+            pwvault.shred(link)
+        self.assertEqual(target.read_text(), "keep me")
+
     def test_logins_without_url_are_not_merged_by_username(self):
         # Regression: two logins with the same username and no URL used to collapse into one entry,
         # overwriting the first password.
@@ -260,6 +323,29 @@ class ImportExportTests(Base):
         pwvault.merge_records(v, pwvault.read_csv_export(csv_path))
         self.assertEqual(pwvault.merge_records(v, pwvault.read_csv_export(csv_path)), (0, 0))
         self.assertEqual(len(v.kp.entries), 2)
+
+
+class CliTests(Base):
+    def run_cli(self, *argv):
+        with patch.object(sys, "argv", ["pwvault", "--vault", str(self.path), *argv]), \
+                patch("getpass.getpass", return_value=PW), self.assertRaises(SystemExit) as cm:
+            pwvault.main()
+        return cm.exception.code
+
+    def test_os_errors_are_reported_without_a_traceback(self):
+        self.new_vault()
+        (self.tmp / "file").write_text("")
+        self.assertRegex(self.run_cli("import", str(self.tmp / "missing.csv")), r"^error: .*missing\.csv")
+        self.assertRegex(self.run_cli("export", "csv", str(self.tmp / "file" / "out.csv")), r"^error: ")
+
+    def test_umask_is_private(self):
+        import os
+        old = os.umask(0o022)
+        try:
+            self.run_cli("--version")
+            self.assertEqual(os.umask(old), 0o077)
+        finally:
+            os.umask(old)
 
 
 class PickOneTests(unittest.TestCase):
@@ -287,6 +373,7 @@ class PickOneTests(unittest.TestCase):
                 self.pick(answer)
 
 
+@unittest.skipUnless(importlib.util.find_spec("tkinter"), "needs tkinter (python3-tk)")
 class GuiGuardTests(unittest.TestCase):
     def test_add_entry_on_unlock_screen_does_nothing(self):
         # Regression: Ctrl+N on the unlock screen (vault locked) raised AttributeError.
@@ -294,6 +381,13 @@ class GuiGuardTests(unittest.TestCase):
         import pwvault_gui
         app = SimpleNamespace(vault=None, current_group=object())
         self.assertIsNone(pwvault_gui.App.add_entry(app))
+
+    def test_attachment_names_from_the_vault_are_plain_file_names(self):
+        import pwvault_gui
+        for stored, offered in (("id.txt", "id.txt"), ("../../.bashrc", "bashrc"), ("/etc/passwd", "passwd"),
+                                ("..\\..\\x.exe", "x.exe"), ("..", "attachment"), (None, "attachment")):
+            with self.subTest(stored=stored):
+                self.assertEqual(pwvault_gui.safe_filename(stored), offered)
 
 
 def display_available() -> bool:

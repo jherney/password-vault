@@ -27,6 +27,7 @@ import math
 import os
 import secrets
 import shutil
+import stat
 import string
 import subprocess
 import sys
@@ -34,9 +35,12 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from lxml import etree
 from pykeepass import PyKeePass
 from pykeepass.exceptions import CredentialsError, PayloadChecksumError
 from pykeepass.pykeepass import BLANK_DATABASE_LOCATION, BLANK_DATABASE_PASSWORD
+
+__version__ = "1.1.0"
 
 DATA_DIR = Path.home() / ".local/share/pwvault"
 DEFAULT_VAULT = Path(os.environ.get("PWVAULT_PATH", DATA_DIR / "vault.kdbx"))
@@ -44,10 +48,17 @@ LEGACY_VAULT = DATA_DIR / "vault.pwv"  # pre-KeePass pwvault format, see migrate
 CLIPBOARD_CLEAR_SECONDS = 20
 MIN_MASTER_LEN = 12
 MIN_GENERATED_LEN = 8
-# Refuse files whose key derivation would take absurd memory or time to unlock.
+# Refuse files whose key derivation would take absurd memory or time to unlock. pykeepass runs
+# AES-KDF as a Python loop (~0.7M rounds/s) and Argon2 with one thread per lane, so these keep a
+# hostile file to about a minute of work. KeePassXC's defaults (64 MiB, ~1 s) are far below them.
 MAX_KDF_MEMORY = 1 << 30  # Argon2 memory, bytes
 MAX_KDF_ITERATIONS = 10_000  # Argon2 passes
-MAX_KDF_ROUNDS = 10**9  # AES-KDF rounds
+MAX_KDF_WORK = 32 << 30  # Argon2 memory x passes, e.g. 64 MiB x 512 or 1 GiB x 32
+MAX_KDF_PARALLELISM = 256  # Argon2 lanes
+MAX_KDF_ROUNDS = 60_000_000  # AES-KDF rounds
+# lxml < 5 resolves external entities by default, so a crafted vault could pull a local file
+# into its XML (and into the next save). pykeepass doesn't pin lxml, so check here.
+MIN_LXML = (5, 0)
 KDBX_SIGNATURE = bytes.fromhex("03d9a29a67fb4bb5")
 KEYFILE_LEN = 32  # KeePass and KeePassXC use a 32-byte key file as the raw key
 HISTORY_MAX = 10  # versions kept per entry, KeePass's default
@@ -61,7 +72,9 @@ class VaultError(Exception):
 # ---------------------------------------------------------------- storage
 
 def write_private(path: Path, data: bytes) -> None:
-    """Atomically write data to path, readable only by the owner."""
+    """Atomically write data to path, readable only by the owner. A symlinked path (say, a vault
+    kept in a synced folder) has its target replaced, not the link."""
+    path = Path(os.path.realpath(path))
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}-")
     try:
@@ -131,9 +144,16 @@ def check_kdf_params(blob: bytes) -> None:
             limits = _read_variant_dict(data)
         else:
             continue
-        if (limits.get("M", 0) > MAX_KDF_MEMORY or limits.get("I", 0) > MAX_KDF_ITERATIONS
-                or limits.get("R", 0) > MAX_KDF_ROUNDS):
+        memory, passes = limits.get("M", 0), limits.get("I", 0)
+        if (memory > MAX_KDF_MEMORY or passes > MAX_KDF_ITERATIONS or memory * passes > MAX_KDF_WORK
+                or limits.get("P", 0) > MAX_KDF_PARALLELISM or limits.get("R", 0) > MAX_KDF_ROUNDS):
             raise VaultError("vault file asks for an unreasonable amount of memory or time to unlock")
+
+
+def check_xml_parser() -> None:
+    if etree.LXML_VERSION[:2] < MIN_LXML:
+        raise VaultError(f"lxml {etree.__version__} is too old to open vaults safely; "
+                         f"install lxml {'.'.join(map(str, MIN_LXML))} or newer (pip install -U lxml)")
 
 
 class Vault:
@@ -160,6 +180,7 @@ class Vault:
         except FileNotFoundError:
             raise VaultError(f"no vault at {path}")
         check_kdf_params(blob)
+        check_xml_parser()
         if keyfile and not Path(keyfile).is_file():
             raise VaultError(f"key file not found: {keyfile}")
         try:
@@ -177,16 +198,17 @@ class Vault:
         buf = io.BytesIO()
         self.kp.save(buf, transformed_key=self.transformed_key)
         blob = buf.getvalue()
-        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        lock_fd = os.open(self.path.with_name(self.path.name + ".lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        target = Path(os.path.realpath(self.path))  # lock the real file, however it was reached
+        target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        lock_fd = os.open(target.with_name(target.name + ".lock"), os.O_RDWR | os.O_CREAT, 0o600)
         try:
             # Serialize writers (CLI and GUI) and refuse to overwrite changes made by another one.
             fcntl.flock(lock_fd, fcntl.LOCK_EX)
-            current = self.path.read_bytes() if self.path.exists() else None
+            current = target.read_bytes() if target.exists() else None
             if current != self.disk_blob:
                 raise VaultError("the vault file was changed by another program since it was "
                                  "unlocked; nothing was saved — unlock it again and redo your change")
-            write_private(self.path, blob)
+            write_private(target, blob)
             self.disk_blob = blob
         finally:
             os.close(lock_fd)
@@ -461,6 +483,15 @@ CSV_COLUMNS = {
 
 def read_csv_export(path: Path) -> list:
     """Read a password-manager or browser CSV export into plain dicts."""
+    try:
+        return _read_csv_export(path)
+    except UnicodeDecodeError:
+        raise VaultError(f"{path} isn't UTF-8 text; re-export it as UTF-8 CSV")
+    except csv.Error as e:
+        raise VaultError(f"{path} isn't a valid CSV file ({e})")
+
+
+def _read_csv_export(path: Path) -> list:
     with open(path, newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         cols = {c.strip().lower(): c for c in (reader.fieldnames or [])}
@@ -513,9 +544,13 @@ SHRED_CAVEAT = ("The file was overwritten and deleted, but on SSDs and copy-on-w
 
 def shred(path: Path) -> None:
     """Best-effort overwrite before deleting; see SHRED_CAVEAT for why it's not a guarantee."""
-    size = path.stat().st_size
-    with open(path, "r+b") as f:
-        f.write(secrets.token_bytes(size))
+    if path.is_symlink():  # overwriting would destroy whatever file the link points at
+        raise VaultError(f"{path} is a symbolic link; delete it yourself")
+    with open(os.open(path, os.O_RDWR | os.O_NOFOLLOW), "r+b") as f:
+        st = os.fstat(f.fileno())
+        if not stat.S_ISREG(st.st_mode):
+            raise VaultError(f"{path} is not a regular file")
+        f.write(secrets.token_bytes(st.st_size))
         f.flush()
         os.fsync(f.fileno())
     path.unlink()
@@ -804,7 +839,9 @@ def length_arg(value: str) -> int:
 
 
 def main():
+    os.umask(0o077)  # anything we write (vaults, key files, exports) is private by default
     ap = argparse.ArgumentParser(prog="pwvault", description="Local password manager (KeePass .kdbx vault).")
+    ap.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     ap.add_argument("--vault", type=Path, default=DEFAULT_VAULT, help=f"vault file (default {DEFAULT_VAULT})")
     ap.add_argument("--keyfile", type=Path, help="key file that unlocks the vault")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -873,10 +910,11 @@ def main():
         args.fn(args)
     except VaultError as e:
         sys.exit(f"error: {e}")
-    except KeyboardInterrupt:
+    except OSError as e:
+        sys.exit(f"error: {e.filename}: {e.strerror}" if e.filename and e.strerror else f"error: {e}")
+    except (KeyboardInterrupt, EOFError):
         sys.exit("\nAborted.")
 
 
 if __name__ == "__main__":
-    os.umask(0o077)
     main()

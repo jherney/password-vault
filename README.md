@@ -17,15 +17,19 @@ A small, local password manager. Your vault is a standard KeePass (`.kdbx`) file
 
 ## Requirements
 
-- Python 3
-- [`pykeepass`](https://pypi.org/project/pykeepass/) (see `requirements.txt`)
+- Linux or another POSIX system, Python 3.10 or newer
+- [`pykeepass`](https://pypi.org/project/pykeepass/) and `lxml` 5.0 or newer (see `requirements.txt`)
 - For the legacy `.pwv` migration only: `cryptography`
 - Optional clipboard tool: `wl-clipboard` (Wayland) or `xclip` / `xsel` (X11)
 - The GUI needs Tkinter (`python3-tk` on Fedora/Debian)
 
+Install into a virtual environment (or with `pipx`), which also puts `pwvault` and `pwvault-gui` on your `PATH`:
+
 ```bash
-pip install -r requirements.txt
+pip install .            # add the [legacy] extra to migrate an old .pwv vault: pip install '.[legacy]'
 ```
+
+Or run the scripts in place after `pip install -r requirements.txt`. The examples below use `python3 pwvault.py`; with the package installed, `pwvault` works the same.
 
 ## Quick start
 
@@ -55,7 +59,7 @@ The default vault is `~/.local/share/pwvault/vault.kdbx`. Override it with `--va
 | `passwd [--new-keyfile PATH] [--no-keyfile]` | Change the master password and/or key file |
 | `keyfile PATH` | Create a random key file |
 
-Global options: `--vault PATH` and `--keyfile PATH`.
+Global options: `--vault PATH`, `--keyfile PATH` and `--version`.
 
 ## GUI
 
@@ -80,11 +84,15 @@ After 5 minutes without input, the vault locks. An open edit dialog holds the va
 
 ## Security model
 
-- The vault is written atomically with file mode `0600`.
+- The vault is written atomically with file mode `0600`. If the vault path is a symlink (for example into a synced folder), the file it points to is updated and the link is kept.
 - Saves hold a file lock and refuse to overwrite changes another program made since you unlocked the vault. Nothing is lost silently; unlock again and redo the change.
-- Key-derivation parameters are checked before any expensive work runs, so a hostile vault file can't force huge memory or time costs.
+- Key-derivation parameters are checked before any expensive work runs, so a hostile vault file can't force huge memory or time costs. Argon2 is limited to 1 GiB, 256 lanes and 32 GiB × passes in total; AES-KDF to 60 million rounds. That is about a minute of work at most, and far above KeePassXC's defaults.
+- Vaults are only opened with `lxml` 5.0 or newer. Older `lxml` expands external XML entities, which a crafted vault could use to copy a local file into itself on the next save.
 - Attachment data is removed from the file once no entry or history version uses it.
-- Exports and CSV imports are plaintext. Delete them when you're done. `import --shred` overwrites the file before deleting it, but on SSDs and copy-on-write filesystems (such as Fedora's default btrfs) old copies can survive. Full-disk encryption is what protects that data.
+- Exports and CSV imports are plaintext. Delete them when you're done. `import --shred` overwrites the file before deleting it (it refuses symlinks, so it can't overwrite some other file), but on SSDs and copy-on-write filesystems (such as Fedora's default btrfs) old copies can survive. Full-disk encryption is what protects that data.
+- Attachment names come from the vault file, so when you save one the GUI suggests only its plain file name, never a path.
+- On Wayland, copied passwords are marked as sensitive so clipboard managers skip them (wl-clipboard 2.2+). X11 has no such hint, so a clipboard manager there may keep a copy.
+- What pwvault can't protect against: malware running as your user (it can read the clipboard, log keystrokes or read process memory), and a weak master password on a vault file someone has copied.
 
 ## Tests
 
@@ -92,7 +100,7 @@ After 5 minutes without input, the vault locks. An open edit dialog holds the va
 python3 -m unittest discover -s tests
 ```
 
-The GUI tests need a display. Without one they're skipped; on a headless machine, run them with `xvfb-run -a python3 -m unittest discover -s tests`. The full suite takes about a minute, because each vault creation runs Argon2.
+The GUI tests need a display. Without one they're skipped; on a headless machine, run them with `xvfb-run -a python3 -m unittest discover -s tests`. The full suite takes about a minute, because each vault creation runs Argon2. GitHub Actions runs the whole suite, GUI tests included, on Python 3.10 to 3.13 for every push and pull request.
 
 ## Project layout
 
@@ -102,6 +110,8 @@ The GUI tests need a display. Without one they're skipped; on a headless machine
 | `pwvault_gui.py` | Tkinter front end; uses the same `pwvault` module |
 | `tests/test_pwvault.py` | Unit and regression tests |
 | `requirements.txt` | Python dependencies |
+| `pyproject.toml` | Packaging; installs the `pwvault` and `pwvault-gui` commands |
+| `.github/workflows/tests.yml` | CI |
 
 ## License
 

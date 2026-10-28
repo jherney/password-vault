@@ -111,6 +111,12 @@ class KeyFileField(ttk.Frame):
         return self.var.get().strip() or None
 
 
+def safe_filename(name) -> str:
+    """An attachment's stored name, reduced to a plain file name. The name comes from the vault
+    file, which may have been made by someone else, so drop any directories and leading dots."""
+    return Path((name or "").replace("\\", "/")).name.lstrip(".") or "attachment"
+
+
 def strength_label(master, var, style_bg=BG):
     """Label that tracks the strength of the password in var."""
     lbl = tk.Label(master, text="", bg=style_bg, fg=MUTED, font=("Sans", 8))
@@ -597,6 +603,8 @@ class App:
                 except (VaultError, OSError) as e:
                     pw.set("")
                     return err.configure(text=str(e).capitalize() + ".", style="Error.TLabel")
+            pw.set("")  # don't leave the master password sitting in Tk variables
+            confirm.set("")
             self.vault = vault
             self.touch()
             self.show_main()
@@ -919,7 +927,8 @@ class App:
         return "break"
 
     def save_attachment(self, att):
-        path = filedialog.asksaveasfilename(parent=self.root, title="Save attachment", initialfile=att.filename)
+        path = filedialog.asksaveasfilename(parent=self.root, title="Save attachment",
+                                            initialfile=safe_filename(att.filename))
         if not path:
             return
         try:
@@ -1037,7 +1046,7 @@ class App:
                 pwvault.shred(path)
                 self.status(f"Imported and deleted {path.name}.")
                 messagebox.showinfo("CSV deleted", pwvault.SHRED_CAVEAT, parent=self.root)
-            except OSError as e:
+            except (VaultError, OSError) as e:
                 messagebox.showerror("Couldn't delete", str(e), parent=self.root)
         else:
             self.status(f"Imported {path.name} — remember to delete it.")
@@ -1046,7 +1055,11 @@ class App:
         self.root.mainloop()
 
 
-if __name__ == "__main__":
+def main():
     os.umask(0o077)
     path = Path(sys.argv[1]) if len(sys.argv) > 1 else pwvault.DEFAULT_VAULT
     App(path).run()
+
+
+if __name__ == "__main__":
+    main()

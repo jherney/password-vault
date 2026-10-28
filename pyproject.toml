@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pwvault"
+dynamic = ["version"]
+description = "A small, local password manager with a KeePass (.kdbx) vault, a CLI and a Tk GUI"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+    "pykeepass==4.2.0",
+    "lxml>=5.0",  # older lxml resolves external XML entities; pwvault refuses to open vaults with it
+]
+classifiers = [
+    "Environment :: Console",
+    "Environment :: X11 Applications",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+]
+
+[project.optional-dependencies]
+legacy = ["cryptography>=42"]  # only for `pwvault migrate` from old .pwv vaults
+
+[project.scripts]
+pwvault = "pwvault:main"
+
+[project.gui-scripts]
+pwvault-gui = "pwvault_gui:main"
+
+[tool.setuptools]
+py-modules = ["pwvault", "pwvault_gui"]
+
+[tool.setuptools.dynamic]
+version = { attr = "pwvault.__version__" }
