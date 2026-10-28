@@ -602,7 +602,10 @@ def export(vault: Vault, path: Path, fmt: str, raw: bool = False) -> int:
     """Write every entry outside the recycle bin in plain text. Returns the entry count.
     csv is spreadsheet-safe unless raw (see FORMULA_START); xml is the full KeePass XML
     (readable by KeePass's own XML import)."""
-    entries = [e for e in vault.kp.entries if not vault.in_recycle_bin(e)]
+    if path.exists() and any(Path(p).exists() and os.path.samefile(path, p)
+                             for p in (vault.path, vault.kp.keyfile) if p):
+        raise VaultError(f"{path} is the vault or its key file; export to a different file")
+    entries =[e for e in vault.kp.entries if not vault.in_recycle_bin(e)]
     rows = [(vault.group_path(e.group), e.title or "", e.username or "", e.password or "",
              e.url or "", e.notes or "", fmt_time(e.mtime), fmt_time(e.ctime)) for e in entries]
     header = EXPORT_HEADER
