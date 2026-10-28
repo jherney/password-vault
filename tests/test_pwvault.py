@@ -517,6 +517,59 @@ class AutoLockTests(Base):
         self.assertTrue(dialog.winfo_exists())
 
 
+@unittest.skipUnless(display_available(), "needs a display; run under xvfb-run")
+class MainWindowTests(Base):
+    def setUp(self):
+        super().setUp()
+        import pwvault_gui
+        self.gui = pwvault_gui
+        v = self.new_vault()
+        v.add_entry(v.root, "A much longer title for history", "u", "p")
+        v.update_entry(v.entries(query="longer")[0], {"password": "p2"})
+        v.save()
+        self.app = pwvault_gui.App(self.path)
+        self.app.vault = self.reopen()
+        self.app.show_main()
+        self.app.root.update()
+
+    def tearDown(self):
+        self.app.root.destroy()
+        super().tearDown()
+
+    def test_entry_count_follows_changes(self):
+        # Regression: the count was set once at unlock (including the recycle bin) and never updated.
+        self.assertEqual(self.app.count_lbl.cget("text"), "2 entries")
+        v = self.app.vault
+        v.add_entry(v.root, "Third", "u", "p")
+        self.app.refresh()
+        self.assertEqual(self.app.count_lbl.cget("text"), "3 entries")
+        v.delete_entry(v.entries(query="Third")[0])
+        self.app.refresh_groups()
+        self.assertEqual(self.app.count_lbl.cget("text"), "2 entries")
+
+    def test_detail_buttons_fit_the_panel(self):
+        # Regression: Edit / History / Delete overflowed the panel and Delete was cut off.
+        self.app.show_group(self.app.vault.root, select=self.app.vault.entries(query="longer")[0])
+        self.app.root.update()
+        panel = self.app.detail
+        buttons = [w for f in panel.winfo_children() if isinstance(f, self.gui.ttk.Frame)
+                   for w in f.winfo_children() if isinstance(w, self.gui.ttk.Button)
+                   and w.cget("text") in ("Edit", "History (1)", "Delete")]
+        self.assertEqual(len(buttons), 3)
+        import tkinter.font
+        font = tkinter.font.Font(root=self.app.root, font=("Sans", 10))
+        for b in buttons:
+            text = b.cget("text")
+            # Label plus the TButton style's 10px side padding must fit, or the text gets clipped.
+            self.assertGreaterEqual(b.winfo_width(), font.measure(text) + 20, text)
+            self.assertLessEqual(b.winfo_rootx() + b.winfo_width(), panel.winfo_rootx() + panel.winfo_width(), text)
+
+    def test_entry_dialog_focuses_title(self):
+        dialog = self.gui.EntryDialog(self.app)
+        self.app.root.update()
+        self.assertIs(dialog.focus_get(), dialog.title_field)
+
+
 class MigrationTests(Base):
     def write_legacy(self, path, password, entries):
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
