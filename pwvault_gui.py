@@ -164,7 +164,10 @@ class EntryDialog(Dialog):
         b = self.body
         for row, (key, label) in enumerate([("title", "Title"), ("username", "Username")]):
             ttk.Label(b, text=label).grid(row=row, column=0, sticky="w", pady=4, padx=(0, 10))
-            ttk.Entry(b, textvariable=self.vars[key], width=44).grid(row=row, column=1, columnspan=2, sticky="ew")
+            field = ttk.Entry(b, textvariable=self.vars[key], width=44)
+            field.grid(row=row, column=1, columnspan=2, sticky="ew")
+            if key == "title":
+                self.title_field = field
         ttk.Label(b, text="Password").grid(row=2, column=0, sticky="w", pady=4)
         self.pw = PasswordField(b, self.vars["password"], width=32)
         self.pw.grid(row=2, column=1, sticky="ew")
@@ -222,6 +225,7 @@ class EntryDialog(Dialog):
         ttk.Button(btns, text="Save", style="Accent.TButton", command=self.save).pack(side="left")
         self.bind("<Return>", lambda ev: self.save() if ev.widget is not self.notes else None)
         self.show()
+        self.title_field.focus_set()
 
     def toggle_expiry(self):
         self.expiry_entry.configure(state="normal" if self.expires.get() else "disabled")
@@ -703,8 +707,12 @@ class App:
         self.detail.grid(row=0, column=2, sticky="ns", padx=(10, 0))
         self.detail.pack_propagate(False)
 
-        self.status_lbl = ttk.Label(f, text="", style="Muted.TLabel")
-        self.status_lbl.pack(fill="x", pady=(6, 0))
+        foot = ttk.Frame(f)
+        foot.pack(fill="x", pady=(6, 0))
+        self.count_lbl = ttk.Label(foot, text="", style="Muted.TLabel")
+        self.count_lbl.pack(side="right")
+        self.status_lbl = ttk.Label(foot, text="", style="Muted.TLabel")
+        self.status_lbl.pack(side="left", fill="x", expand=True)
 
         self.tree.bind("<<TreeviewSelect>>", lambda e: self.show_detail())
         self.tree.bind("<Double-1>", lambda e: self.edit_selected())
@@ -718,7 +726,7 @@ class App:
         self.sort_col = "title"
         self.current_group = self.vault.root
         self.refresh_groups()
-        self.status(f"{len(self.vault.kp.entries)} entries · double-click a field to copy it · "
+        self.status("Double-click a field to copy it · "
                     f"Ctrl+C copy password · Ctrl+B copy username · auto-locks after {AUTO_LOCK_SECONDS // 60} min idle")
 
     # ---------------------------------------------------------- groups
@@ -820,6 +828,8 @@ class App:
         v = self.vault
         q = self.search.get().strip()
         entries = v.entries(self.current_group, q)
+        total = sum(1 for e in v.kp.entries if not v.in_recycle_bin(e))
+        self.count_lbl.configure(text=f"{total} entr{'y' if total == 1 else 'ies'}")
         sel = self.selected()
         self.tree.delete(*self.tree.get_children())
         self.items = {k: x for k, x in self.items.items() if not k.startswith("e:")}
@@ -901,14 +911,18 @@ class App:
         btns = ttk.Frame(d, style="Panel.TFrame")
         btns.pack(fill="x", side="bottom")
         if in_bin:
-            ttk.Button(btns, text="Restore", command=self.restore_selected).pack(side="left")
-            ttk.Button(btns, text="Delete forever", style="Danger.TButton",
-                       command=self.delete_selected).pack(side="right")
+            buttons = [("Restore", self.restore_selected, "TButton"),
+                       ("Delete forever", self.delete_selected, "Danger.TButton")]
         else:
-            ttk.Button(btns, text="Edit", command=self.edit_selected).pack(side="left")
-            ttk.Button(btns, text=f"History ({len(e.history)})",
-                       command=lambda: HistoryDialog(self, e)).pack(side="left", padx=4)
-            ttk.Button(btns, text="Delete", style="Danger.TButton", command=self.delete_selected).pack(side="right")
+            buttons = [("Edit", self.edit_selected, "TButton"),
+                       (f"History ({len(e.history)})", lambda: HistoryDialog(self, e), "TButton"),
+                       ("Delete", self.delete_selected, "Danger.TButton")]
+        # ttk buttons default to a minimum width that, three abreast, overflows the fixed-width
+        # panel; width=1 plus equal grid columns makes them share the space instead.
+        for i, (text, cmd, style) in enumerate(buttons):
+            btns.columnconfigure(i, weight=1, uniform="btn")
+            ttk.Button(btns, text=text, command=cmd, style=style, width=1).grid(
+                row=0, column=i, sticky="ew", padx=(0 if i == 0 else 4, 0))
 
     def copy_field(self, key):
         e = self.selected()
@@ -982,8 +996,12 @@ class App:
         m.add_command(label="Import CSV…", command=self.import_csv)
         exp = tk.Menu(m, tearoff=0, bg=PANEL, fg=FG, activebackground=ACCENT, activeforeground="#fff")
         for fmt in pwvault.EXPORT_FORMATS:
-            exp.add_command(label=fmt.upper() + ("  (KeePass XML)" if fmt == "xml" else ""),
+            exp.add_command(label=fmt.upper() + {"csv": "  (safe to open in a spreadsheet)",
+                                                 "xml": "  (KeePass XML)"}.get(fmt, ""),
                             command=lambda f=fmt: self.export(f))
+            if fmt == "csv":
+                exp.add_command(label="CSV  (raw, for another password manager)",
+                                command=lambda: self.export("csv", raw=True))
         m.add_cascade(label="Export", menu=exp)
         m.add_separator()
         m.add_command(label="Empty recycle bin…", command=self.empty_bin)
@@ -1007,16 +1025,19 @@ class App:
             self.refresh_groups()
             self.status(f"Permanently deleted {n} item{'s' if n != 1 else ''}.")
 
-    def export(self, fmt):
-        if not messagebox.askokcancel("Export", f"{pwvault.EXPORT_WARNING}\n\nContinue?", icon="warning",
-                                      parent=self.root):
+    def export(self, fmt, raw=False):
+        warning = pwvault.EXPORT_WARNING
+        if raw:
+            warning += ("\n\nRaw CSV keeps every value exactly, so don't open it in a spreadsheet app: "
+                        "a hostile entry could run there as a formula.")
+        if not messagebox.askokcancel("Export", f"{warning}\n\nContinue?", icon="warning", parent=self.root):
             return
         path = filedialog.asksaveasfilename(parent=self.root, title=f"Export as {fmt.upper()}",
                                             initialfile=f"pwvault-export.{fmt}", defaultextension="." + fmt)
         if not path or self.vault is None:
             return
         try:
-            n = pwvault.export(self.vault, Path(path), fmt)
+            n = pwvault.export(self.vault, Path(path), fmt, raw=raw)
         except (VaultError, OSError) as e:
             return messagebox.showerror("Export failed", str(e), parent=self.root)
         self.status(f"Exported {n} entries to {Path(path).name} — delete it when you're done.")
