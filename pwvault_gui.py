@@ -425,7 +425,9 @@ class ChangeMasterDialog(Dialog):
             self.app.vault.rekey(self.new.get(), self.keyfile.get())
             if not self.app.save():
                 return
-        self.app.status("Master key changed.")
+        purged = self.app.vault.purged_backups
+        self.app.status("Master key changed." + (f" Removed {purged} backups made with the old key."
+                                                  if purged else ""))
         self.destroy()
 
 

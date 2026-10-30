@@ -8,6 +8,7 @@ Security model:
   * KDBX 4: AES-256 encryption, Argon2d key derivation (64 MiB, KeePassXC's defaults)
   * Unlock with a master password, a key file, or both
   * Atomic writes, file mode 0600; a save refuses to overwrite changes made by another session
+  * Each save first keeps the file it replaces in <vault>.backups/ (last 10)
   * Attachment data is pruned from the file when no entry or history version uses it
 
 Features: nested groups, entry history, recycle bin, expiry dates, file attachments,
@@ -62,6 +63,8 @@ MIN_LXML = (5, 0)
 KDBX_SIGNATURE = bytes.fromhex("03d9a29a67fb4bb5")
 KEYFILE_LEN = 32  # KeePass and KeePassXC use a 32-byte key file as the raw key
 HISTORY_MAX = 10  # versions kept per entry, KeePass's default
+BACKUP_KEEP = 10  # previous vault files kept in <vault>.backups/
+BACKUP_STAMP = "%Y%m%dT%H%M%S.%f"  # UTC, so backup names sort by age
 KEEP = object()  # "leave this unchanged" marker for update_entry(expiry=...)
 
 
@@ -87,6 +90,47 @@ def write_private(path: Path, data: bytes) -> None:
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
+
+
+def backup_dir(path: Path) -> Path:
+    """Where previous versions of the vault at path are kept: beside the real file, so a
+    symlinked vault keeps its backups next to its target."""
+    target = Path(os.path.realpath(path))
+    return target.with_name(target.name + ".backups")
+
+
+def list_backups(path: Path) -> list:
+    """(time, path) for each backup of the vault at path, newest first. Files in the backup
+    directory that pwvault didn't name are ignored."""
+    stem = Path(os.path.realpath(path)).stem
+    try:
+        names = os.listdir(backup_dir(path))
+    except FileNotFoundError:
+        return []
+    found = []
+    for name in names:
+        if not (name.startswith(stem + "-") and name.endswith(".kdbx")):
+            continue
+        try:
+            when = datetime.strptime(name[len(stem) + 1:-5], BACKUP_STAMP).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        found.append((when, backup_dir(path) / name))
+    return sorted(found, reverse=True)
+
+
+def remove_backups(path: Path, keep: int = 0) -> int:
+    """Delete all but the newest `keep` backups and return how many went. A plain unlink: the
+    backups are encrypted, and overwriting first achieves nothing on copy-on-write filesystems
+    (btrfs, Fedora's default) or SSDs."""
+    removed = 0
+    for _, old in list_backups(path)[keep:]:
+        try:
+            old.unlink()
+            removed += 1
+        except OSError:
+            pass  # a leftover backup is harmless; failing the save over it is not
+    return removed
 
 
 def check_master_key(password: str, keyfile) -> None:
@@ -168,6 +212,19 @@ def check_xml_parser() -> None:
                          f"install lxml {'.'.join(map(str, MIN_LXML))} or newer (pip install -U lxml)")
 
 
+def load_kdbx(blob: bytes, password, keyfile) -> PyKeePass:
+    check_kdf_params(blob)
+    check_xml_parser()
+    try:
+        return PyKeePass(io.BytesIO(blob), password, keyfile)
+    except CredentialsError:
+        raise VaultError("wrong master password or key file")
+    except PayloadChecksumError:
+        raise VaultError("vault file is corrupted")
+    except Exception:
+        raise VaultError("vault file is truncated or corrupted")
+
+
 class Vault:
     """An unlocked KeePass database plus the bookkeeping for safe saves."""
 
@@ -177,6 +234,8 @@ class Vault:
         self.disk_blob = disk_blob
         # Derived key, reused so routine saves don't rerun Argon2. None after a key change.
         self.transformed_key = transformed_key
+        self.rekeyed = False  # key changed and not yet saved; backups still use the old key
+        self.purged_backups = 0  # old-key backups the last save deleted
 
     @classmethod
     def create(cls, path: Path, password: str, keyfile=None) -> "Vault":
@@ -191,25 +250,40 @@ class Vault:
             blob = path.read_bytes()
         except FileNotFoundError:
             raise VaultError(f"no vault at {path}")
-        check_kdf_params(blob)
-        check_xml_parser()
         if keyfile and not Path(keyfile).is_file():
             raise VaultError(f"key file not found: {keyfile}")
-        try:
-            kp = PyKeePass(io.BytesIO(blob), password or None, str(keyfile) if keyfile else None)
-        except CredentialsError:
-            raise VaultError("wrong master password or key file")
-        except PayloadChecksumError:
-            raise VaultError("vault file is corrupted")
-        except Exception:
-            raise VaultError("vault file is truncated or corrupted")
+        kp = load_kdbx(blob, password or None, str(keyfile) if keyfile else None)
         return cls(path, kp, blob, kp.transformed_key)
 
+    def restore(self, backup: Path) -> None:
+        """Make a backup the vault file again, once it's shown to open with this vault's key. The
+        file it replaces is backed up first, like any save."""
+        blob = backup.read_bytes()
+        try:
+            kp = load_kdbx(blob, self.kp.password, self.kp.keyfile)
+        except VaultError as e:
+            raise VaultError(f"backup {backup.name} can't be restored: {e}")
+        self._write(blob)
+        self.kp, self.transformed_key = kp, kp.transformed_key
+
     def save(self) -> None:
+        self.purged_backups = 0
         self._prune_binaries()
         buf = io.BytesIO()
         self.kp.save(buf, transformed_key=self.transformed_key)
         blob = buf.getvalue()
+        self._write(blob)
+        if self.transformed_key is None:
+            # First save after create/rekey ran Argon2 with a fresh salt; learn the new key.
+            self.transformed_key = PyKeePass(io.BytesIO(blob), self.kp.password, self.kp.keyfile).transformed_key
+            if self.rekeyed:
+                # The new file opens with the new key, so the backups, all made with the retired
+                # key (perhaps changed because it leaked), can go.
+                self.purged_backups = remove_backups(self.path)
+                self.rekeyed = False
+
+    def _write(self, blob: bytes) -> None:
+        """Replace the vault file with blob, first keeping the file it replaces as a backup."""
         target = Path(os.path.realpath(self.path))  # lock the real file, however it was reached
         target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         lock_fd = os.open(target.with_name(target.name + ".lock"), os.O_RDWR | os.O_CREAT, 0o600)
@@ -220,18 +294,22 @@ class Vault:
             if current != self.disk_blob:
                 raise VaultError("the vault file was changed by another program since it was "
                                  "unlocked; nothing was saved — unlock it again and redo your change")
+            if current is not None:
+                # Under the lock and from the bytes just checked, so it's exactly what gets replaced.
+                # If the backup can't be written, neither is the vault.
+                stamp = datetime.now(timezone.utc).strftime(BACKUP_STAMP)
+                write_private(backup_dir(target) / f"{target.stem}-{stamp}.kdbx", current)
             write_private(target, blob)
             self.disk_blob = blob
+            remove_backups(target, keep=BACKUP_KEEP)
         finally:
             os.close(lock_fd)
-        if self.transformed_key is None:
-            # First save after create/rekey ran Argon2 with a fresh salt; learn the new key.
-            self.transformed_key = PyKeePass(io.BytesIO(blob), self.kp.password, self.kp.keyfile).transformed_key
 
     def rekey(self, password: str, keyfile=None) -> None:
         check_master_key(password, keyfile)
         self.kp.password, self.kp.keyfile = password or None, str(keyfile) if keyfile else None
         self.transformed_key = None
+        self.rekeyed = True
 
     def _prune_binaries(self) -> None:
         """Drop attachment data no entry or history version refers to any more, so deleted
@@ -868,6 +946,27 @@ def cmd_passwd(args):
     vault.rekey(password, keyfile)
     vault.save()
     print("Master key changed." + (f" The vault now also needs {keyfile}." if keyfile else ""))
+    if vault.purged_backups:
+        print(f"Removed {vault.purged_backups} backups made with the old master key.")
+
+
+def cmd_backup(args):
+    backups = list_backups(args.vault)
+    if args.action == "list":
+        if not backups:
+            print("No backups yet.")
+        for i, (when, path) in enumerate(backups, 1):
+            print(f"{i:3}. {when.astimezone():%Y-%m-%d %H:%M:%S}  {path.stat().st_size / 1024:.1f} KB")
+        return
+    if args.number is None:
+        raise VaultError("say which backup to restore, e.g. `pwvault backup restore 1` (see `backup list`)")
+    if not 1 <= args.number <= len(backups):
+        raise VaultError(f"no backup {args.number}; there are {len(backups)} (see `backup list`)")
+    when, path = backups[args.number - 1]
+    vault = unlock(args)
+    vault.restore(path)
+    print(f"Restored backup {args.number} ({when.astimezone():%Y-%m-%d %H:%M:%S}). "
+          "The previous vault was backed up first.")
 
 
 def cmd_keyfile(args):
@@ -947,6 +1046,11 @@ def main():
     p.add_argument("--new-keyfile", type=Path, metavar="PATH", help="create and require a new key file")
     p.add_argument("--no-keyfile", action="store_true", help="stop requiring a key file")
     p.set_defaults(fn=cmd_passwd)
+
+    p = sub.add_parser("backup", help=f"list or restore the last {BACKUP_KEEP} versions of the vault")
+    p.add_argument("action", choices=("list", "restore"))
+    p.add_argument("number", type=int, nargs="?", help="backup to restore, as numbered by `backup list`")
+    p.set_defaults(fn=cmd_backup)
 
     p = sub.add_parser("keyfile", help="create a new random key file")
     p.add_argument("out", type=Path)

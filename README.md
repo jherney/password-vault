@@ -14,6 +14,7 @@ A small, local password manager. Your vault is a standard KeePass (`.kdbx`) file
 - Password generator with a strength estimate
 - Clipboard copy that clears itself after 20 seconds
 - Auto-lock after 5 minutes idle (see [Auto-lock](#auto-lock))
+- Automatic backup of the previous vault on every save, last 10 kept (see [Backups](#backups))
 
 ## Requirements
 
@@ -57,6 +58,7 @@ The default vault is `~/.local/share/pwvault/vault.kdbx`. Override it with `--va
 | `trash {list,restore,empty} [QUERY]` | Work with the recycle bin |
 | `generate [-l LEN] [--no-symbols] [--no-lookalikes] [--show]` | Generate a password without saving it |
 | `passwd [--new-keyfile PATH] [--no-keyfile]` | Change the master password and/or key file |
+| `backup {list,restore} [N]` | List the automatic backups, or restore backup `N` (see [Backups](#backups)) |
 | `keyfile PATH` | Create a random key file |
 
 Global options: `--vault PATH`, `--keyfile PATH` and `--version`.
@@ -81,6 +83,19 @@ The GUI offers search across all groups, add/edit with a password generator, ent
 ### Auto-lock
 
 After 5 minutes without input, the vault locks. An open edit dialog holds the vault unlocked, so the lock waits for it to close. That wait is capped: after 10 more minutes the vault locks anyway and the dialog's unsaved edits are discarded. Locking with Ctrl+L or the Lock button always closes open dialogs.
+
+## Backups
+
+Before every save, from the CLI or the GUI, pwvault copies the vault file it is about to replace into a `.backups` folder next to it (for the default vault, `~/.local/share/pwvault/vault.kdbx.backups/`). The last 10 are kept. If the backup can't be written, the save is cancelled and the vault is left as it was.
+
+```bash
+python3 pwvault.py backup list        # numbered, newest first
+python3 pwvault.py backup restore 2   # asks for the master password
+```
+
+A backup is a complete `.kdbx` file, encrypted with the master key that was in use when it was made, so it also opens in KeePassXC. `restore` checks that the backup opens with the vault's current key before it changes anything, and backs up the current vault first, so a restore can itself be undone.
+
+Changing the master key (`passwd` or the GUI) deletes the existing backups once the re-keyed vault is saved, because they would still open with the old password. The files are deleted, not overwritten: on SSDs and copy-on-write filesystems overwriting wouldn't remove old copies anyway.
 
 ## Security model
 
