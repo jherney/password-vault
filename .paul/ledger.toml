@@ -1,0 +1,83 @@
+# .paul/ledger.toml — Session history for cost/time attribution
+# Append-only. BASE extracts for usage analytics cross-reference.
+
+[[entry]]
+action = "plan"
+phase = 1
+plan = "01-01"
+at = "2026-10-30T19:39:29-03:00"
+
+[[entry]]
+action = "apply"
+phase = 1
+plan = "01-01"
+at = "2026-10-30T19:52:37-03:00"
+
+[[entry]]
+action = "unify"
+phase = 1
+plan = "01-01"
+at = "2026-10-30T20:08:00-03:00"
+
+[[entry]]
+action = "transition"
+phase = 1
+at = "2026-10-30T20:08:00-03:00"
+
+[[entry]]
+action = "plan"
+phase = 2
+plan = "02-01"
+at = "2026-10-30T20:12:51-03:00"
+
+[[entry]]
+action = "apply"
+phase = 2
+plan = "02-01"
+at = "2026-10-30T20:14:00-03:00"
+
+[[entry]]
+action = "unify"
+phase = 2
+plan = "02-01"
+at = "2026-10-30T20:20:00-03:00"
+
+[[entry]]
+action = "transition"
+phase = 2
+at = "2026-10-30T20:20:00-03:00"
+
+[[entry]]
+action = "plan"
+phase = 3
+plan = "03-01"
+at = "2026-10-30T20:40:00-03:00"
+
+[[entry]]
+action = "unify"
+phase = 3
+plan = "03-01"
+at = "2026-10-30T22:00:53-03:00"
+
+[[entry]]
+action = "transition"
+phase = 3
+at = "2026-10-30T22:00:53-03:00"
+
+[[entry]]
+action = "plan"
+phase = 4
+plan = "04-01"
+at = "2026-10-30T22:03:27-03:00"
+
+[[entry]]
+action = "apply"
+phase = 4
+plan = "04-01"
+at = "2026-10-30T22:11:55-03:00"
+
+[[entry]]
+action = "unify"
+phase = 4
+plan = "04-01"
+at = "2026-10-30T22:25:57-03:00"

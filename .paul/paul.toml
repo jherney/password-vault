@@ -1,0 +1,32 @@
+name = "pwvault"
+version = "1.2.0"
+status = "active"
+path = "password-vault"
+tags = []
+
+[paul]
+version = "1.4"
+source = "https://chrisai.cv/skool"
+
+[milestone]
+name = "v1.3 Hardening, TOTP, Backups & Release"
+version = "1.3.0"
+status = "in_progress"
+phases = 5
+
+[phase]
+number = 4
+name = "Security review & hardening"
+status = "in_progress"
+plans_completed = 1
+
+[loop]
+position = "IDLE"
+
+[satellite]
+groom = true
+
+[stats]
+total_plans = 4
+total_phases = 5
+last_activity = "2026-10-30T22:25:57-03:00"

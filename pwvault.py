@@ -8,18 +8,22 @@ Security model:
   * KDBX 4: AES-256 encryption, Argon2d key derivation (64 MiB, KeePassXC's defaults)
   * Unlock with a master password, a key file, or both
   * Atomic writes, file mode 0600; a save refuses to overwrite changes made by another session
+  * Each save first keeps the file it replaces in <vault>.backups/ (last 10)
   * Attachment data is pruned from the file when no entry or history version uses it
 
 Features: nested groups, entry history, recycle bin, expiry dates, file attachments,
+TOTP (2FA) codes stored the way KeePassXC stores them,
 import from browser / KeePass / Bitwarden / LastPass / 1Password CSV exports,
 export to CSV, HTML, XML and TXT, and a configurable password generator.
 """
 
 import argparse
+import base64
 import csv
 import fcntl
 import getpass
 import hashlib
+import hmac
 import html
 import io
 import json
@@ -29,9 +33,14 @@ import secrets
 import shutil
 import stat
 import string
+import struct
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.parse
+import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -57,11 +66,14 @@ MAX_KDF_WORK = 32 << 30  # Argon2 memory x passes, e.g. 64 MiB x 512 or 1 GiB x 
 MAX_KDF_PARALLELISM = 256  # Argon2 lanes
 MAX_KDF_ROUNDS = 60_000_000  # AES-KDF rounds
 # lxml < 5 resolves external entities by default, so a crafted vault could pull a local file
-# into its XML (and into the next save). pykeepass doesn't pin lxml, so check here.
-MIN_LXML = (5, 0)
+# into its XML (and into the next save). lxml < 6.1 has an advisory (GHSA-vfmq-68hx-4jfw) for the
+# default iterparse() and ETCompatXMLParser() configurations. pykeepass doesn't pin lxml, so check here.
+MIN_LXML = (6, 1)
 KDBX_SIGNATURE = bytes.fromhex("03d9a29a67fb4bb5")
 KEYFILE_LEN = 32  # KeePass and KeePassXC use a 32-byte key file as the raw key
 HISTORY_MAX = 10  # versions kept per entry, KeePass's default
+BACKUP_KEEP = 10  # previous vault files kept in <vault>.backups/
+BACKUP_STAMP = "%Y%m%dT%H%M%S.%f"  # UTC, so backup names sort by age
 KEEP = object()  # "leave this unchanged" marker for update_entry(expiry=...)
 
 
@@ -87,6 +99,74 @@ def write_private(path: Path, data: bytes) -> None:
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
+
+
+def backup_dir(path: Path) -> Path:
+    """Where previous versions of the vault at path are kept: beside the real file, so a
+    symlinked vault keeps its backups next to its target."""
+    target = Path(os.path.realpath(path))
+    return target.with_name(target.name + ".backups")
+
+
+def list_backups(path: Path) -> list:
+    """(time, path) for each backup of the vault at path, newest first. Files in the backup
+    directory that pwvault didn't name are ignored."""
+    stem = Path(os.path.realpath(path)).stem
+    try:
+        names = os.listdir(backup_dir(path))
+    except FileNotFoundError:
+        return []
+    found = []
+    for name in names:
+        if not (name.startswith(stem + "-") and name.endswith(".kdbx")):
+            continue
+        try:
+            when = datetime.strptime(name[len(stem) + 1:-5], BACKUP_STAMP).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        found.append((when, backup_dir(path) / name))
+    return sorted(found, reverse=True)
+
+
+def remove_backups(path: Path, keep: int = 0) -> int:
+    """Delete all but the newest `keep` backups and return how many went. A plain unlink: the
+    backups are encrypted, and overwriting first achieves nothing on copy-on-write filesystems
+    (btrfs, Fedora's default) or SSDs."""
+    removed = 0
+    for _, old in list_backups(path)[keep:]:
+        try:
+            old.unlink()
+            removed += 1
+        except OSError:
+            pass  # a leftover backup is harmless; failing the save over it is not
+    return removed
+
+
+REKEY_MARKER = ".rekey-pending"  # in the backup folder; not named like a backup, so listings skip it
+
+
+def _rekey_marker(path: Path) -> Path:
+    return backup_dir(path) / REKEY_MARKER
+
+
+def _write_rekey_marker(path: Path, blob: bytes) -> None:
+    """Record the digest of the file a re-key is about to write, before writing it."""
+    backup_dir(path).mkdir(parents=True, exist_ok=True, mode=0o700)
+    write_private(_rekey_marker(path), hashlib.sha256(blob).hexdigest().encode())
+
+
+def _finish_interrupted_rekey(path: Path, blob: bytes) -> None:
+    """A re-key that crashed after writing the new file, before purging the backups made with the
+    old key, is finished here. If the vault on disk is the file the marker recorded, the purge
+    runs; otherwise the write never happened, so only the marker goes."""
+    marker = _rekey_marker(path)
+    try:
+        recorded = marker.read_text().strip()
+    except FileNotFoundError:
+        return
+    if recorded == hashlib.sha256(blob).hexdigest():
+        remove_backups(path)
+    marker.unlink(missing_ok=True)
 
 
 def check_master_key(password: str, keyfile) -> None:
@@ -168,6 +248,19 @@ def check_xml_parser() -> None:
                          f"install lxml {'.'.join(map(str, MIN_LXML))} or newer (pip install -U lxml)")
 
 
+def load_kdbx(blob: bytes, password, keyfile) -> PyKeePass:
+    check_kdf_params(blob)
+    check_xml_parser()
+    try:
+        return PyKeePass(io.BytesIO(blob), password, keyfile)
+    except CredentialsError:
+        raise VaultError("wrong master password or key file")
+    except PayloadChecksumError:
+        raise VaultError("vault file is corrupted")
+    except Exception:
+        raise VaultError("vault file is truncated or corrupted")
+
+
 class Vault:
     """An unlocked KeePass database plus the bookkeeping for safe saves."""
 
@@ -177,6 +270,8 @@ class Vault:
         self.disk_blob = disk_blob
         # Derived key, reused so routine saves don't rerun Argon2. None after a key change.
         self.transformed_key = transformed_key
+        self.rekeyed = False  # key changed and not yet saved; backups still use the old key
+        self.purged_backups = 0  # old-key backups the last save deleted
 
     @classmethod
     def create(cls, path: Path, password: str, keyfile=None) -> "Vault":
@@ -191,25 +286,44 @@ class Vault:
             blob = path.read_bytes()
         except FileNotFoundError:
             raise VaultError(f"no vault at {path}")
-        check_kdf_params(blob)
-        check_xml_parser()
         if keyfile and not Path(keyfile).is_file():
             raise VaultError(f"key file not found: {keyfile}")
-        try:
-            kp = PyKeePass(io.BytesIO(blob), password or None, str(keyfile) if keyfile else None)
-        except CredentialsError:
-            raise VaultError("wrong master password or key file")
-        except PayloadChecksumError:
-            raise VaultError("vault file is corrupted")
-        except Exception:
-            raise VaultError("vault file is truncated or corrupted")
+        kp = load_kdbx(blob, password or None, str(keyfile) if keyfile else None)
+        _finish_interrupted_rekey(path, blob)
         return cls(path, kp, blob, kp.transformed_key)
 
+    def restore(self, backup: Path) -> None:
+        """Make a backup the vault file again, once it's shown to open with this vault's key. The
+        file it replaces is backed up first, like any save."""
+        blob = backup.read_bytes()
+        try:
+            kp = load_kdbx(blob, self.kp.password, self.kp.keyfile)
+        except VaultError as e:
+            raise VaultError(f"backup {backup.name} can't be restored: {e}")
+        self._write(blob)
+        self.kp, self.transformed_key = kp, kp.transformed_key
+
     def save(self) -> None:
+        self.purged_backups = 0
         self._prune_binaries()
         buf = io.BytesIO()
         self.kp.save(buf, transformed_key=self.transformed_key)
         blob = buf.getvalue()
+        if self.rekeyed:
+            _write_rekey_marker(self.path, blob)  # so a crash before the purge is finished on open
+        self._write(blob)
+        if self.transformed_key is None:
+            # First save after create/rekey ran Argon2 with a fresh salt; learn the new key.
+            self.transformed_key = PyKeePass(io.BytesIO(blob), self.kp.password, self.kp.keyfile).transformed_key
+            if self.rekeyed:
+                # The new file opens with the new key, so the backups, all made with the retired
+                # key (perhaps changed because it leaked), can go.
+                self.purged_backups = remove_backups(self.path)
+                _rekey_marker(self.path).unlink(missing_ok=True)
+                self.rekeyed = False
+
+    def _write(self, blob: bytes) -> None:
+        """Replace the vault file with blob, first keeping the file it replaces as a backup."""
         target = Path(os.path.realpath(self.path))  # lock the real file, however it was reached
         target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         lock_fd = os.open(target.with_name(target.name + ".lock"), os.O_RDWR | os.O_CREAT, 0o600)
@@ -220,18 +334,22 @@ class Vault:
             if current != self.disk_blob:
                 raise VaultError("the vault file was changed by another program since it was "
                                  "unlocked; nothing was saved — unlock it again and redo your change")
+            if current is not None:
+                # Under the lock and from the bytes just checked, so it's exactly what gets replaced.
+                # If the backup can't be written, neither is the vault.
+                stamp = datetime.now(timezone.utc).strftime(BACKUP_STAMP)
+                write_private(backup_dir(target) / f"{target.stem}-{stamp}.kdbx", current)
             write_private(target, blob)
             self.disk_blob = blob
+            remove_backups(target, keep=BACKUP_KEEP)
         finally:
             os.close(lock_fd)
-        if self.transformed_key is None:
-            # First save after create/rekey ran Argon2 with a fresh salt; learn the new key.
-            self.transformed_key = PyKeePass(io.BytesIO(blob), self.kp.password, self.kp.keyfile).transformed_key
 
     def rekey(self, password: str, keyfile=None) -> None:
         check_master_key(password, keyfile)
         self.kp.password, self.kp.keyfile = password or None, str(keyfile) if keyfile else None
         self.transformed_key = None
+        self.rekeyed = True
 
     def _prune_binaries(self) -> None:
         """Drop attachment data no entry or history version refers to any more, so deleted
@@ -323,22 +441,24 @@ class Vault:
                     and any(q in (v or "").lower() for v in (e.title, e.username, e.url, e.notes))]
         return list((group or self.root).entries)
 
-    def add_entry(self, group, title, username, password, url="", notes="", expiry=None):
+    def add_entry(self, group, title, username, password, url="", notes="", expiry=None, otp=""):
         # pykeepass puts title and username into an XPath duplicate check (pointless with
         # force_creation) that breaks on a double quote, so set them afterwards.
         entry = self.kp.add_entry(group or self.root, "", "", password or "",
                                   url=url or None, notes=notes or None, force_creation=True)
         entry.title, entry.username = title or "", username or ""
         set_expiry(entry, expiry)
+        set_otp(entry, otp)
         return entry
 
-    FIELDS = ("title", "username", "password", "url", "notes")
+    # "otp" holds the TOTP setting; callers pass it through normalize_totp() first.
+    FIELDS = ("title", "username", "password", "url", "notes", "otp")
 
     def update_entry(self, entry, fields: dict, group=None, expiry=KEEP,
                      add_attachments=(), remove_attachments=()) -> None:
         """Apply changes, archiving the previous version in the entry's history first.
         Changing nothing is a no-op: it adds no history version and doesn't touch the entry."""
-        changed = (any(k in fields and (fields[k] or "") != (getattr(entry, k) or "") for k in self.FIELDS)
+        changed = (any(k in fields and field_differs(entry, k, fields[k]) for k in self.FIELDS)
                    or (expiry is not KEEP and expiry != (entry.expiry_time if entry.expires else None))
                    or bool(add_attachments) or bool(remove_attachments)
                    or (group is not None and group.uuid != entry.group.uuid))
@@ -348,7 +468,9 @@ class Vault:
         while len(entry.history) > HISTORY_MAX:
             entry.delete_history(entry.history[0])  # oldest first
         for k in self.FIELDS:
-            if k in fields:
+            if k == "otp" and k in fields:
+                set_otp(entry, fields[k])
+            elif k in fields:
                 setattr(entry, k, fields[k] or "")
         if expiry is not KEEP:
             set_expiry(entry, expiry)
@@ -362,18 +484,57 @@ class Vault:
 
     def restore_history(self, entry, version) -> None:
         """Make an old version current again (the current one goes into history)."""
-        self.update_entry(entry, {k: getattr(version, k) for k in self.FIELDS},
-                          expiry=version.expiry_time if version.expires else None)
+        fields = {k: getattr(version, k) for k in self.FIELDS}
+        if not version.otp and version.get_custom_property("TOTP Seed"):
+            # The old version kept its TOTP in the legacy fields. If the entry still does, leave
+            # them alone; if it has since moved to "otp", bring the old secret back there.
+            del fields["otp"]
+            if entry.otp:
+                try:
+                    fields["otp"] = totp_uri(entry_totp(version), version.title, version.username)
+                except VaultError:
+                    pass  # unreadable then, unreadable now: keep the current setting
+        self.update_entry(entry, fields, expiry=version.expiry_time if version.expires else None)
 
     def delete_entry(self, entry) -> None:
         """Move to the recycle bin; delete permanently if it is already there."""
         if self.in_recycle_bin(entry):
             self.kp.delete_entry(entry)
         else:
+            self._set_previous_group(entry, entry.group)
             self.kp.trash_entry(entry)
 
     def restore_entry(self, entry, group=None) -> None:
-        self.kp.move_entry(entry, group or self.root)
+        """Restore to the given group, else to the group it was trashed from, else to the root."""
+        target = group or self._previous_group(entry) or self.root
+        self.kp.move_entry(entry, target)
+        self._clear_previous_group(entry)
+
+    # The group an entry was trashed from is stored in the standard PreviousParentGroup element
+    # (base64 UUID of the group), the same element KeePassXC writes, so both apps restore alike.
+    def _set_previous_group(self, entry, group) -> None:
+        el = entry._element.find("PreviousParentGroup")
+        if el is None:
+            el = etree.SubElement(entry._element, "PreviousParentGroup")
+        el.text = base64.b64encode(group.uuid.bytes).decode()
+
+    def _previous_group(self, entry):
+        el = entry._element.find("PreviousParentGroup")
+        if el is None or not el.text:
+            return None
+        try:
+            group_uuid = uuid.UUID(bytes=base64.b64decode(el.text, validate=True))
+        except (ValueError, TypeError):
+            return None  # a damaged element means "unknown", so the entry goes to the root
+        group = self.kp.find_groups(uuid=group_uuid, first=True)
+        if group is None or self.in_recycle_bin(group):
+            return None
+        return group
+
+    def _clear_previous_group(self, entry) -> None:
+        el = entry._element.find("PreviousParentGroup")
+        if el is not None:
+            entry._element.remove(el)
 
     def empty_recycle_bin(self) -> int:
         bin_ = self.recycle_bin
@@ -385,6 +546,33 @@ class Vault:
 
     def add_attachment(self, entry, name: str, data: bytes):
         return entry.add_attachment(self.kp.add_binary(data), name)
+
+
+def field_differs(entry, key: str, value) -> bool:
+    if key == "otp":  # no TOTP differs from a TOTP kept in the legacy fields
+        return (value or "") != (entry.otp or "") or (not value and bool(entry.get_custom_property("TOTP Seed")))
+    return (value or "") != (getattr(entry, key) or "")
+
+
+def set_otp(entry, value: str) -> None:
+    """Store a TOTP setting in "otp" (protected, as KeePassXC does), or remove the entry's TOTP if
+    value is empty. A change also drops the legacy TOTP fields, so an entry never holds two secrets."""
+    if not field_differs(entry, "otp", value):
+        return
+    for key in TOTP_LEGACY_FIELDS:
+        remove_string_field(entry, key)
+    if value:
+        entry.otp = value
+    else:
+        remove_string_field(entry, "otp")
+
+
+def remove_string_field(entry, key: str) -> None:
+    # pykeepass's delete_custom_property() refuses "otp" (a reserved key) and builds an XPath
+    # from the key, so compare the Key text directly.
+    for s in entry._element.findall("String"):
+        if s.findtext("Key") == key:
+            entry._element.remove(s)
 
 
 def set_expiry(entry, expiry) -> None:
@@ -441,6 +629,138 @@ def strength(password: str) -> tuple:
     bits = int(len(password) * math.log2(pool)) if password and pool else 0
     label = "weak" if bits < 50 else "fair" if bits < 75 else "strong" if bits < 110 else "very strong"
     return bits, label
+
+
+# ---------------------------------------------------------------- TOTP (2FA) codes
+
+# Stored the way KeePassXC stores it: an otpauth:// URI in the entry's "otp" field. Also read, as
+# KeePassXC does: KeeOtp's "key=…&step=…&size=…" in that field, and the older KeeTrayTOTP fields
+# "TOTP Seed" + "TOTP Settings" ("30;6", or "30;S" for Steam).
+TOTP_LEGACY_FIELDS = ("TOTP Seed", "TOTP Settings")
+TOTP_ALGORITHMS = {"SHA1": "sha1", "SHA256": "sha256", "SHA512": "sha512"}
+STEAM_ALPHABET = "23456789BCDFGHJKMNPQRTVWXY"
+
+
+@dataclass(frozen=True)
+class Totp:
+    secret: bytes
+    digits: int = 6
+    period: int = 30
+    algorithm: str = "SHA1"
+    steam: bool = False  # Steam Guard: characters from STEAM_ALPHABET instead of digits
+
+
+def _totp_secret(text: str) -> bytes:
+    """Decode base32 as sites display it: any case, with spaces or dashes, padding optional."""
+    s = "".join(text.split()).replace("-", "").upper().rstrip("=")
+    try:
+        secret = base64.b32decode(s + "=" * (-len(s) % 8))
+    except ValueError:  # includes binascii.Error and non-ASCII input
+        raise VaultError("TOTP secret isn't valid base32")
+    if not secret:
+        raise VaultError("TOTP secret is empty")
+    return secret
+
+
+def _make_totp(secret: str, digits, period, algorithm="SHA1", steam=False) -> Totp:
+    algo = (algorithm or "SHA1").upper().replace("-", "")
+    if algo not in TOTP_ALGORITHMS:
+        raise VaultError(f"unknown TOTP algorithm {algorithm}")
+    try:
+        period = int(period)
+    except (TypeError, ValueError):
+        period = 0
+    if period <= 0:
+        raise VaultError("TOTP period must be a positive number of seconds")
+    # Steam codes are 5 characters. KeePassXC makes them as long as an otpauth URI's digits=
+    # (it writes digits=5 itself), so honour that, but default to Steam's 5 rather than its 6.
+    low = 5 if steam else 6
+    try:
+        digits = int(digits if digits not in (None, "") else low)
+    except (TypeError, ValueError):
+        digits = 0
+    if not low <= digits <= 10:
+        raise VaultError(f"TOTP digits must be {low}–10")
+    return Totp(_totp_secret(secret), digits, period, algo, steam)
+
+
+def parse_totp(text: str) -> Totp:
+    """Read an otpauth://totp URI or a KeeOtp "key=…" string, as KeePassXC does."""
+    text = (text or "").strip()
+    if text.lower().startswith("otpauth://"):
+        url = urllib.parse.urlsplit(text)
+        kind = url.netloc.lower()
+        if kind == "hotp":
+            raise VaultError("HOTP (counter-based) codes aren't supported")
+        if kind != "totp":
+            raise VaultError("TOTP setting isn't an otpauth://totp URI")
+        q = {k.lower(): v for k, v in urllib.parse.parse_qsl(url.query)}
+        return _make_totp(q.get("secret", ""), q.get("digits"), q.get("period", 30),
+                          q.get("algorithm", "SHA1"), q.get("encoder", "").lower() == "steam")
+    q = {k.lower(): v for k, v in urllib.parse.parse_qsl(text)}
+    if "key" in q:
+        return _make_totp(q["key"], q.get("size", 6), q.get("step", 30), q.get("otphashmode", "SHA1"))
+    raise VaultError("TOTP setting isn't an otpauth:// URI or a KeeOtp key=… string")
+
+
+def entry_totp(entry):
+    """The entry's TOTP settings, or None if it has none. Raises VaultError if they're unreadable."""
+    if entry.otp:
+        return parse_totp(entry.otp)
+    seed = entry.get_custom_property("TOTP Seed")
+    if not seed:
+        return None
+    period, digits = ((entry.get_custom_property("TOTP Settings") or "").split(";") + ["", ""])[:2]
+    steam = digits.strip().upper() == "S"
+    return _make_totp(seed, None if steam else digits.strip(), period.strip() or 30, steam=steam)
+
+
+def totp_code(t: Totp, now=None) -> tuple:
+    """(current code, seconds until it changes), per RFC 6238 (and Steam's variant of it)."""
+    now = int(time.time() if now is None else now)
+    counter, elapsed = divmod(now, t.period)
+    mac = hmac.new(t.secret, struct.pack(">Q", counter), TOTP_ALGORITHMS[t.algorithm]).digest()
+    offset = mac[-1] & 0x0F
+    n = int.from_bytes(mac[offset:offset + 4], "big") & 0x7FFFFFFF  # RFC 4226 dynamic truncation
+    if t.steam:
+        code = ""
+        for _ in range(t.digits):
+            n, i = divmod(n, len(STEAM_ALPHABET))
+            code += STEAM_ALPHABET[i]
+    else:
+        code = str(n % 10 ** t.digits).zfill(t.digits)
+    return code, t.period - elapsed
+
+
+def fmt_totp_code(code: str) -> str:
+    """'123 456', '1234 5678'; Steam codes as they are. For display only, never for copying."""
+    if not code.isdigit():
+        return code
+    half = (len(code) + 1) // 2
+    return f"{code[:half]} {code[half:]}"
+
+
+def totp_uri(t: Totp, title: str, username: str) -> str:
+    """The otpauth URI KeePassXC writes for these settings."""
+    issuer = urllib.parse.quote(title or "pwvault", safe="")
+    secret = base64.b32encode(t.secret).decode().rstrip("=")
+    uri = (f"otpauth://totp/{issuer}:{urllib.parse.quote(username or '', safe='')}"
+           f"?secret={secret}&period={t.period}&digits={t.digits}&issuer={issuer}")
+    if t.steam:
+        uri += "&encoder=steam"
+    if t.algorithm != "SHA1":
+        uri += f"&algorithm={t.algorithm}"
+    return uri
+
+
+def normalize_totp(text: str, title: str = "", username: str = "") -> str:
+    """What to store in "otp" for what the user typed: a valid otpauth URI as is (KeePassXC keeps
+    extra parameters too), or a bare base32 secret as a standard 30 s / 6-digit URI."""
+    text = (text or "").strip()
+    if text.lower().startswith("otpauth://"):
+        parse_totp(text)
+        return text
+    return totp_uri(Totp(_totp_secret(text)), title, username)
 
 
 # ---------------------------------------------------------------- clipboard
@@ -602,7 +922,12 @@ def export(vault: Vault, path: Path, fmt: str, raw: bool = False) -> int:
     """Write every entry outside the recycle bin in plain text. Returns the entry count.
     csv is spreadsheet-safe unless raw (see FORMULA_START); xml is the full KeePass XML
     (readable by KeePass's own XML import)."""
-    entries = [e for e in vault.kp.entries if not vault.in_recycle_bin(e)]
+    if path.exists() and any(Path(p).exists() and os.path.samefile(path, p)
+                             for p in (vault.path, vault.kp.keyfile) if p):
+        raise VaultError(f"{path} is the vault or its key file; export to a different file")
+    if path.exists():  # an export is a copy of the vault; never replace a file the user may still need
+        raise VaultError(f"{path} already exists; choose another name")
+    entries =[e for e in vault.kp.entries if not vault.in_recycle_bin(e)]
     rows = [(vault.group_path(e.group), e.title or "", e.username or "", e.password or "",
              e.url or "", e.notes or "", fmt_time(e.mtime), fmt_time(e.ctime)) for e in entries]
     header = EXPORT_HEADER
@@ -728,12 +1053,13 @@ def copy_and_report(entry) -> None:
 def cmd_init(args):
     if args.vault.exists():
         sys.exit(f"error: a vault already exists at {args.vault}")
-    if args.new_keyfile:
-        generate_keyfile(args.new_keyfile)
-        print(f"Created key file {args.new_keyfile}. Back it up: without it the vault can't be opened.")
     keyfile = args.new_keyfile or args.keyfile
     print("Choose a master password. It can't be recovered if you forget it.")
-    Vault.create(args.vault, prompt_new_master(keyfile), keyfile).save()
+    password = prompt_new_master(keyfile)
+    if args.new_keyfile:  # only now, so aborting at the prompt leaves no stray key file
+        generate_keyfile(args.new_keyfile)
+        print(f"Created key file {args.new_keyfile}. Back it up: without it the vault can't be opened.")
+    Vault.create(args.vault, password, keyfile).save()
     print(f"Created encrypted KeePass vault at {args.vault}")
 
 
@@ -789,10 +1115,44 @@ def cmd_get(args):
         print(f"Notes:    {e.notes}")
     if e.expires:
         print(f"Expires:  {fmt_time(e.expiry_time)}" + ("  (EXPIRED)" if e.expired else ""))
+    try:
+        if entry_totp(e):
+            print(f"TOTP:     set — `pwvault totp {args.query}`")
+    except VaultError as err:
+        print(f"TOTP:     unreadable ({err})")
     if args.show:
         print(f"Password: {e.password}")
     else:
         copy_and_report(e)
+
+
+def cmd_totp(args):
+    vault = unlock(args)
+    e = pick_one(find(vault, args.query), args.query)
+    if args.set:
+        value = normalize_totp(getpass.getpass("TOTP secret or otpauth:// URI: "), e.title, e.username)
+        vault.update_entry(e, {"otp": value})
+        vault.save()
+        code, left = totp_code(entry_totp(e))
+        return print(f"TOTP set for '{e.title}'. Current code: {fmt_totp_code(code)} ({left}s left).")
+    if args.clear:
+        if not field_differs(e, "otp", ""):
+            raise VaultError(f"'{e.title}' has no TOTP secret")
+        if input(f"Remove the TOTP secret from '{e.title}'? [y/N] ").lower() != "y":
+            return print("Cancelled.")
+        vault.update_entry(e, {"otp": ""})
+        vault.save()
+        return print("TOTP removed.")
+    totp = entry_totp(e)
+    if totp is None:
+        raise VaultError(f"'{e.title}' has no TOTP secret — add one with `pwvault totp {args.query} --set`")
+    code, left = totp_code(totp)
+    if args.show:
+        print(f"{fmt_totp_code(code)}  ({left}s left)")
+    elif copy_to_clipboard(code):
+        print(f"Code copied to clipboard (valid {left}s more; clipboard clears in {CLIPBOARD_CLEAR_SECONDS}s).")
+    else:
+        print("No clipboard tool found (install wl-clipboard or xclip); use --show to print it.")
 
 
 def cmd_add(args):
@@ -800,6 +1160,8 @@ def cmd_add(args):
     group = vault.get_group(args.group, create=True) if args.group else vault.root
     title = input("Title (e.g. GitHub): ").strip()
     url = input("URL: ").strip()
+    if not (title or url):
+        raise VaultError("an entry needs a title or a URL")
     username = input("Username: ").strip()
     if args.generate:
         password = generate_password(args.length)
@@ -857,12 +1219,34 @@ def cmd_generate(args):
 def cmd_passwd(args):
     vault = unlock(args)
     keyfile = None if args.no_keyfile else (args.new_keyfile or args.keyfile)
-    if args.new_keyfile:
+    password = prompt_new_master(keyfile)
+    if args.new_keyfile:  # only now, so aborting at the prompt leaves no stray key file
         generate_keyfile(args.new_keyfile)
         print(f"Created key file {args.new_keyfile}. Back it up: without it the vault can't be opened.")
-    vault.rekey(prompt_new_master(keyfile), keyfile)
+    vault.rekey(password, keyfile)
     vault.save()
     print("Master key changed." + (f" The vault now also needs {keyfile}." if keyfile else ""))
+    if vault.purged_backups:
+        print(f"Removed {vault.purged_backups} backups made with the old master key.")
+
+
+def cmd_backup(args):
+    backups = list_backups(args.vault)
+    if args.action == "list":
+        if not backups:
+            print("No backups yet.")
+        for i, (when, path) in enumerate(backups, 1):
+            print(f"{i:3}. {when.astimezone():%Y-%m-%d %H:%M:%S}  {path.stat().st_size / 1024:.1f} KB")
+        return
+    if args.number is None:
+        raise VaultError("say which backup to restore, e.g. `pwvault backup restore 1` (see `backup list`)")
+    if not 1 <= args.number <= len(backups):
+        raise VaultError(f"no backup {args.number}; there are {len(backups)} (see `backup list`)")
+    when, path = backups[args.number - 1]
+    vault = unlock(args)
+    vault.restore(path)
+    print(f"Restored backup {args.number} ({when.astimezone():%Y-%m-%d %H:%M:%S}). "
+          "The previous vault was backed up first.")
 
 
 def cmd_keyfile(args):
@@ -916,6 +1300,14 @@ def main():
     p.add_argument("--show", action="store_true", help="print the password instead")
     p.set_defaults(fn=cmd_get)
 
+    p = sub.add_parser("totp", help="copy the current 2FA (TOTP) code, or set/clear the secret")
+    p.add_argument("query")
+    p.add_argument("--show", action="store_true", help="print the code instead")
+    change = p.add_mutually_exclusive_group()
+    change.add_argument("--set", action="store_true", help="set the secret (asked for, hidden)")
+    change.add_argument("--clear", action="store_true", help="remove the secret")
+    p.set_defaults(fn=cmd_totp)
+
     p = sub.add_parser("add", help="add an entry")
     p.add_argument("-g", "--generate", action="store_true", help="generate the password")
     p.add_argument("-l", "--length", type=length_arg, default=24)
@@ -942,6 +1334,11 @@ def main():
     p.add_argument("--new-keyfile", type=Path, metavar="PATH", help="create and require a new key file")
     p.add_argument("--no-keyfile", action="store_true", help="stop requiring a key file")
     p.set_defaults(fn=cmd_passwd)
+
+    p = sub.add_parser("backup", help=f"list or restore the last {BACKUP_KEEP} versions of the vault")
+    p.add_argument("action", choices=("list", "restore"))
+    p.add_argument("number", type=int, nargs="?", help="backup to restore, as numbered by `backup list`")
+    p.set_defaults(fn=cmd_backup)
 
     p = sub.add_parser("keyfile", help="create a new random key file")
     p.add_argument("out", type=Path)

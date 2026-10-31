@@ -4,11 +4,13 @@
 Uses the same vault file and code as the `pwvault.py` CLI.
 """
 
+import configparser
 import os
+import subprocess
 import sys
 import tkinter as tk
 from pathlib import Path
-from time import monotonic
+from time import monotonic, time
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -20,8 +22,100 @@ AUTO_LOCK_SECONDS = 5 * 60
 DIALOG_HOLD_SECONDS = 10 * 60
 CLIP_SECONDS = pwvault.CLIPBOARD_CLEAR_SECONDS
 
-BG, PANEL, FG, MUTED, ACCENT, DANGER = "#1e1f26", "#2a2c36", "#e6e6eb", "#9a9cab", "#6c8cff", "#e5636b"
-STRENGTH_COLORS = {"weak": DANGER, "fair": "#e0b050", "strong": "#6cc28a", "very strong": "#6cc28a"}
+# The dark palette is the look the app has always had. The light one meets 4.5:1 for body and muted text
+# against both its background and its panels.
+DARK = {"BG": "#1e1f26", "PANEL": "#2a2c36", "FG": "#e6e6eb", "MUTED": "#9a9cab", "ACCENT": "#4263eb",
+        "ACCENT_ACTIVE": "#3652c8", "BUTTON_ACTIVE": "#3a3d4a", "ON_ACCENT": "#ffffff", "DANGER": "#e5636b",
+        "FAIR": "#e0b050", "STRONG": "#6cc28a"}
+LIGHT = {"BG": "#eff0f3", "PANEL": "#fdfdfe", "FG": "#1d1f27", "MUTED": "#5b5e6b", "ACCENT": "#3b5bdb",
+         "ACCENT_ACTIVE": "#364fc7", "BUTTON_ACTIVE": "#dfe2ea", "ON_ACCENT": "#ffffff", "DANGER": "#c92a2a",
+         "FAIR": "#9a6700", "STRONG": "#2b7a4b"}
+
+
+def _kde_window_is_light(text: str):
+    """True or False from KDE's [Colors:Window] BackgroundNormal, or None if the file doesn't say."""
+    cp = configparser.ConfigParser(interpolation=None, strict=False)
+    try:
+        cp.read_string(text)
+        r, g, b = (int(x) for x in cp.get("Colors:Window", "BackgroundNormal").split(","))
+    except (configparser.Error, ValueError):
+        return None
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.5
+
+
+def detect_color_scheme(home: Path | None = None, run=subprocess.run) -> str:
+    """'light' or 'dark' from the desktop setting: KDE's window colour first, then GNOME's
+    color-scheme. Anything unreadable means dark, the app's original look."""
+    try:
+        text = ((home or Path.home()) / ".config" / "kdeglobals").read_text(errors="replace")
+    except OSError:
+        text = ""
+    kde = _kde_window_is_light(text)
+    if kde is not None:
+        return "light" if kde else "dark"
+    try:
+        out = run(["gsettings", "get", "org.gnome.desktop.interface", "color-scheme"],
+                  capture_output=True, text=True, timeout=2, check=False).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return "dark"
+    return "light" if out == "'prefer-light'" else "dark"
+
+
+THEME_CHOICES = ("system", "light", "dark")
+
+
+def settings_path(home: Path | None = None) -> Path:
+    base = os.environ.get("XDG_CONFIG_HOME")
+    return (Path(base) if base else (home or Path.home()) / ".config") / "pwvault" / "settings.ini"
+
+
+def read_theme_choice(path: Path | None = None) -> str:
+    """'system', 'light' or 'dark' as saved in settings.ini. A missing or unreadable file means 'system'."""
+    cp = configparser.ConfigParser(interpolation=None)
+    try:
+        cp.read(path or settings_path(), encoding="utf-8")
+        choice = cp.get("ui", "theme", fallback="system")
+    except (configparser.Error, OSError, ValueError):
+        return "system"
+    return choice if choice in THEME_CHOICES else "system"
+
+
+def write_theme_choice(choice: str, path: Path | None = None) -> None:
+    path = path or settings_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cp = configparser.ConfigParser(interpolation=None)
+    cp["ui"] = {"theme": choice}
+    with path.open("w", encoding="utf-8") as f:
+        cp.write(f)
+
+
+def theme_label(choice: str) -> str:
+    return f"Theme: {choice.capitalize()}"
+
+
+def theme_name(choice: str | None = None, home: Path | None = None, run=subprocess.run) -> str:
+    """'light' or 'dark': the saved choice if it's set, otherwise the desktop setting."""
+    choice = read_theme_choice() if choice is None else choice
+    if choice in ("light", "dark"):
+        return choice
+    return detect_color_scheme(home, run)
+
+
+STRENGTH_COLORS = {}
+PALETTE_NAME = ""
+
+
+def use_palette(name: str) -> None:
+    """Make 'light' or 'dark' the palette that widgets are drawn with from now on."""
+    global PALETTE_NAME, BG, PANEL, FG, MUTED, ACCENT, DANGER, ACCENT_ACTIVE, BUTTON_ACTIVE, ON_ACCENT
+    p = LIGHT if name == "light" else DARK
+    PALETTE_NAME = name
+    BG, PANEL, FG, MUTED, ACCENT, DANGER = p["BG"], p["PANEL"], p["FG"], p["MUTED"], p["ACCENT"], p["DANGER"]
+    ACCENT_ACTIVE, BUTTON_ACTIVE, ON_ACCENT = p["ACCENT_ACTIVE"], p["BUTTON_ACTIVE"], p["ON_ACCENT"]
+    STRENGTH_COLORS.update({"weak": DANGER, "fair": p["FAIR"], "strong": p["STRONG"], "very strong": p["STRONG"]})
+
+
+use_palette(theme_name())  # chosen once at startup, before any widget is built
 
 
 def apply_style(root: tk.Tk) -> None:
@@ -39,10 +133,10 @@ def apply_style(root: tk.Tk) -> None:
     s.configure("Title.TLabel", font=("Sans", 18, "bold"))
     s.configure("Error.TLabel", foreground=DANGER)
     s.configure("TButton", background=PANEL, foreground=FG, padding=(10, 5), borderwidth=0)
-    s.map("TButton", background=[("active", "#3a3d4a")])
+    s.map("TButton", background=[("active", BUTTON_ACTIVE)])
     s.configure("Small.TButton", padding=(6, 2))
-    s.configure("Accent.TButton", background=ACCENT, foreground="#ffffff")
-    s.map("Accent.TButton", background=[("active", "#5a7af0")])
+    s.configure("Accent.TButton", background=ACCENT, foreground=ON_ACCENT)
+    s.map("Accent.TButton", background=[("active", ACCENT_ACTIVE)])
     s.configure("Danger.TButton", foreground=DANGER)
     s.configure("TEntry", foreground=FG, insertcolor=FG, padding=5)
     s.configure("TCombobox", foreground=FG, arrowcolor=FG, padding=4)
@@ -52,7 +146,7 @@ def apply_style(root: tk.Tk) -> None:
     s.configure("TSpinbox", foreground=FG, arrowcolor=FG, padding=4)
     s.configure("Treeview", background=PANEL, fieldbackground=PANEL, foreground=FG, rowheight=26,
                 borderwidth=0)
-    s.map("Treeview", background=[("selected", ACCENT)], foreground=[("selected", "#ffffff")])
+    s.map("Treeview", background=[("selected", ACCENT)], foreground=[("selected", ON_ACCENT)])
     s.configure("Treeview.Heading", background=BG, foreground=MUTED, borderwidth=0,
                 font=("Sans", 9, "bold"))
     s.map("Treeview.Heading", background=[("active", BG)])
@@ -117,9 +211,37 @@ def safe_filename(name) -> str:
     return Path((name or "").replace("\\", "/")).name.lstrip(".") or "attachment"
 
 
-def strength_label(master, var, style_bg=BG):
+COLOUR_OPTIONS = ("background", "foreground", "activebackground", "activeforeground", "highlightbackground",
+                  "highlightcolor", "insertbackground", "selectbackground", "selectforeground", "disabledforeground")
+
+
+def _recolour(widget, swap: dict) -> None:
+    """Swap the colours a widget and its children were drawn with, for widgets that set colours directly."""
+    options = widget.keys()
+    for opt in COLOUR_OPTIONS:
+        if opt in options:
+            new = swap.get(str(widget.cget(opt)).lower())
+            if new:
+                widget.configure({opt: new})
+    for child in widget.winfo_children():
+        _recolour(child, swap)
+
+
+def switch_palette(root: tk.Tk, name: str) -> None:
+    """Re-colour the open window and any open dialogs to the named palette, without rebuilding them."""
+    if name == PALETTE_NAME:
+        return
+    old = LIGHT if PALETTE_NAME == "light" else DARK
+    new = LIGHT if name == "light" else DARK
+    swap = {old[k].lower(): new[k] for k in old}
+    use_palette(name)
+    apply_style(root)
+    _recolour(root, swap)
+
+
+def strength_label(master, var, style_bg=None):
     """Label that tracks the strength of the password in var."""
-    lbl = tk.Label(master, text="", bg=style_bg, fg=MUTED, font=("Sans", 8))
+    lbl = tk.Label(master, text="", bg=style_bg or BG, fg=MUTED, font=("Sans", 8))
 
     def update(*_):
         pw = var.get()
@@ -168,25 +290,33 @@ class EntryDialog(Dialog):
             field.grid(row=row, column=1, columnspan=2, sticky="ew")
             if key == "title":
                 self.title_field = field
-        ttk.Label(b, text="Password").grid(row=2, column=0, sticky="w", pady=4)
+        ttk.Label(b, text="Password").grid(row=2, column=0, sticky="w", pady=4, padx=(0, 10))
         self.pw = PasswordField(b, self.vars["password"], width=32)
         self.pw.grid(row=2, column=1, sticky="ew")
         ttk.Button(b, text="Generate", command=self.generate).grid(row=2, column=2, padx=(4, 0))
         strength_label(b, self.vars["password"]).grid(row=3, column=1, sticky="w")
-        ttk.Label(b, text="URL").grid(row=4, column=0, sticky="w", pady=4)
+        ttk.Label(b, text="URL").grid(row=4, column=0, sticky="w", pady=4, padx=(0, 10))
         ttk.Entry(b, textvariable=self.vars["url"], width=44).grid(row=4, column=1, columnspan=2, sticky="ew")
 
-        ttk.Label(b, text="Group").grid(row=5, column=0, sticky="w", pady=4)
+        # Only a changed TOTP field is saved, so editing other fields leaves legacy TOTP storage be.
+        self.otp_initial = self.initial_otp(entry)
+        self.otp = tk.StringVar(value=self.otp_initial)
+        ttk.Label(b, text="TOTP").grid(row=5, column=0, sticky="w", pady=4, padx=(0, 10))
+        PasswordField(b, self.otp, width=32).grid(row=5, column=1, columnspan=2, sticky="ew")
+        ttk.Label(b, text="2FA secret or otpauth:// URI, optional", style="Muted.TLabel").grid(
+            row=6, column=1, sticky="w")
+
+        ttk.Label(b, text="Group").grid(row=7, column=0, sticky="w", pady=4, padx=(0, 10))
         self.groups = v.groups()
         self.group_names = [v.group_path(g) for g in self.groups]
         current = entry.group if entry and not v.in_recycle_bin(entry) else (group or v.root)
         self.group = tk.StringVar(value=v.group_path(current))
         ttk.Combobox(b, textvariable=self.group, values=self.group_names, state="readonly").grid(
-            row=5, column=1, columnspan=2, sticky="ew")
+            row=7, column=1, columnspan=2, sticky="ew")
 
-        ttk.Label(b, text="Expires").grid(row=6, column=0, sticky="w", pady=4)
+        ttk.Label(b, text="Expires").grid(row=8, column=0, sticky="w", pady=4, padx=(0, 10))
         exp = ttk.Frame(b)
-        exp.grid(row=6, column=1, columnspan=2, sticky="w")
+        exp.grid(row=8, column=1, columnspan=2, sticky="w")
         has_expiry = bool(entry and entry.expires)
         self.expires = tk.BooleanVar(value=has_expiry)
         self.expiry = tk.StringVar(value=entry.expiry_time.astimezone().strftime("%Y-%m-%d") if has_expiry else "")
@@ -196,18 +326,18 @@ class EntryDialog(Dialog):
         ttk.Label(exp, text="  YYYY-MM-DD", style="Muted.TLabel").pack(side="left")
         self.toggle_expiry()
 
-        ttk.Label(b, text="Notes").grid(row=7, column=0, sticky="nw", pady=4)
+        ttk.Label(b, text="Notes").grid(row=9, column=0, sticky="nw", pady=4, padx=(0, 10))
         self.notes = tk.Text(b, width=44, height=4, bg=PANEL, fg=FG, insertbackground=FG,
                              relief="flat", wrap="word", font=("Sans", 10))
         self.notes.insert("1.0", (entry.notes or "") if entry else "")
-        self.notes.grid(row=7, column=1, columnspan=2, sticky="ew", pady=4)
+        self.notes.grid(row=9, column=1, columnspan=2, sticky="ew", pady=4)
 
         # Attachment changes are staged here and applied on Save.
         self.attachments = list(entry.attachments) if entry else []
         self.to_add, self.to_remove = [], []
-        ttk.Label(b, text="Attachments").grid(row=8, column=0, sticky="nw", pady=4)
+        ttk.Label(b, text="Attachments").grid(row=10, column=0, sticky="nw", pady=4, padx=(0, 10))
         att = ttk.Frame(b)
-        att.grid(row=8, column=1, columnspan=2, sticky="ew", pady=4)
+        att.grid(row=10, column=1, columnspan=2, sticky="ew", pady=4)
         self.att_list = tk.Listbox(att, height=3, bg=PANEL, fg=FG, relief="flat", highlightthickness=0,
                                    selectbackground=ACCENT)
         self.att_list.pack(side="left", fill="x", expand=True)
@@ -218,14 +348,27 @@ class EntryDialog(Dialog):
         self.refresh_attachments()
 
         self.err = ttk.Label(b, text="", style="Error.TLabel")
-        self.err.grid(row=9, column=0, columnspan=3, sticky="w")
+        self.err.grid(row=11, column=0, columnspan=3, sticky="w")
         btns = ttk.Frame(b)
-        btns.grid(row=10, column=0, columnspan=3, sticky="e", pady=(8, 0))
+        btns.grid(row=12, column=0, columnspan=3, sticky="e", pady=(8, 0))
         ttk.Button(btns, text="Cancel", command=self.destroy).pack(side="left", padx=4)
         ttk.Button(btns, text="Save", style="Accent.TButton", command=self.save).pack(side="left")
         self.bind("<Return>", lambda ev: self.save() if ev.widget is not self.notes else None)
         self.show()
         self.title_field.focus_set()
+
+    @staticmethod
+    def initial_otp(entry) -> str:
+        """What the TOTP field starts with: the otp text, or a URI made from legacy fields."""
+        if entry is None:
+            return ""
+        if entry.otp:
+            return entry.otp
+        try:
+            totp = pwvault.entry_totp(entry)
+        except VaultError:
+            return entry.get_custom_property("TOTP Seed") or ""  # shown as is, to fix or clear
+        return pwvault.totp_uri(totp, entry.title, entry.username) if totp else ""
 
     def toggle_expiry(self):
         self.expiry_entry.configure(state="normal" if self.expires.get() else "disabled")
@@ -281,12 +424,19 @@ class EntryDialog(Dialog):
             return self.err.configure(text=str(e).capitalize() + ".")
         if self.expires.get() and expiry is None:
             return self.err.configure(text="Enter an expiry date, or untick Expires.")
+        otp = self.otp.get().strip()
+        if otp != self.otp_initial.strip():
+            try:
+                f["otp"] = pwvault.normalize_totp(otp, f["title"], f["username"]) if otp else ""
+            except VaultError as e:
+                return self.err.configure(text=f"{str(e)[:1].upper()}{str(e)[1:]}.")
         group = self.groups[self.group_names.index(self.group.get())]
         if self.entry:
             v.update_entry(self.entry, f, group, expiry, self.to_add, self.to_remove)
             entry = self.entry
         else:
-            entry = v.add_entry(group, f["title"], f["username"], f["password"], f["url"], f["notes"], expiry)
+            entry = v.add_entry(group, f["title"], f["username"], f["password"], f["url"], f["notes"], expiry,
+                                f.get("otp", ""))
             for name, data in self.to_add:
                 v.add_attachment(entry, name, data)
         if self.app.save():
@@ -344,6 +494,56 @@ class HistoryDialog(Dialog):
         self.destroy()
 
 
+class BackupsDialog(Dialog):
+    def __init__(self, app):
+        super().__init__(app, "Backups")
+        self.backups = pwvault.list_backups(app.vault.path)  # newest first
+        b = self.body
+        if not self.backups:
+            ttk.Label(b, text="No backups yet. A backup of the vault is kept each time it is saved (the last 10).",
+                      style="Muted.TLabel", wraplength=360).pack()
+        else:
+            self.tree = ttk.Treeview(b, columns=("when", "size"), show="headings",
+                                     height=min(10, len(self.backups)), selectmode="browse")
+            self.tree.heading("when", text="Saved")
+            self.tree.column("when", width=200, anchor="w")
+            self.tree.heading("size", text="Size")
+            self.tree.column("size", width=90, anchor="e")
+            for i, (when, path) in enumerate(self.backups):
+                self.tree.insert("", "end", iid=str(i), values=(
+                    when.astimezone().strftime("%Y-%m-%d %H:%M:%S"), f"{path.stat().st_size / 1024:.1f} KB"))
+            self.tree.pack(fill="both", expand=True)
+            self.tree.selection_set("0")
+            self.error = ttk.Label(b, style="Error.TLabel", wraplength=360)
+            self.error.pack(anchor="w", pady=(8, 0))
+        btns = ttk.Frame(b)
+        btns.pack(fill="x", pady=(10, 0))
+        ttk.Button(btns, text="Close", command=self.destroy).pack(side="right")
+        self.restore_btn = ttk.Button(btns, text="Restore this backup", style="Accent.TButton",
+                                      command=self.restore, state="normal" if self.backups else "disabled")
+        self.restore_btn.pack(side="right", padx=4)
+        self.show()
+
+    def restore(self):
+        sel = self.tree.selection()
+        if not sel:
+            return
+        when, path = self.backups[int(sel[0])]
+        if not messagebox.askyesno(
+                "Restore backup",
+                f"Replace the current vault with the backup from {when.astimezone():%Y-%m-%d %H:%M:%S}?\n\n"
+                "The current file is kept as a backup first.", parent=self):
+            return
+        try:
+            self.app.vault.restore(path)
+        except (VaultError, OSError) as err:
+            self.error.configure(text=str(err).capitalize() + ".")
+            return
+        # Locking drops the in-memory vault and asks for the password again, so the entries shown
+        # are the restored file's (the same reload the app does after a failed save).
+        self.app.lock(f"Restored the backup from {when.astimezone():%Y-%m-%d %H:%M:%S}. Unlock to continue.")
+
+
 class GeneratorDialog(Dialog):
     def __init__(self, app):
         super().__init__(app, "Password generator")
@@ -394,7 +594,7 @@ class ChangeMasterDialog(Dialog):
             ttk.Label(b, text=label).grid(row=row, column=0, sticky="w", pady=4, padx=(0, 10))
             PasswordField(b, var).grid(row=row, column=1, sticky="ew")
         strength_label(b, self.new).grid(row=3, column=1, sticky="w")
-        ttk.Label(b, text="New key file").grid(row=4, column=0, sticky="w", pady=4)
+        ttk.Label(b, text="New key file").grid(row=4, column=0, sticky="w", pady=4, padx=(0, 10))
         self.keyfile = KeyFileField(b, app, allow_new=True)
         self.keyfile.grid(row=4, column=1, sticky="ew")
         if app.vault.kp.keyfile:
@@ -425,7 +625,9 @@ class ChangeMasterDialog(Dialog):
             self.app.vault.rekey(self.new.get(), self.keyfile.get())
             if not self.app.save():
                 return
-        self.app.status("Master key changed.")
+        purged = self.app.vault.purged_backups
+        self.app.status("Master key changed." + (f" Removed {purged} backups made with the old key."
+                                                  if purged else ""))
         self.destroy()
 
 
@@ -436,6 +638,7 @@ class App:
         self.clip_job = None
         self.clip_text = None
         self.lock_job = None
+        self.totp_job = None  # ticks the one-time code shown in the detail panel
         self.hold_since = None  # when an open dialog first deferred the idle lock
         self.current_group = None
         self.items = {}  # treeview iid -> pykeepass Entry / Group
@@ -463,10 +666,15 @@ class App:
         return self._Busy(self.root)
 
     def swap(self, frame):
+        self.stop_totp()  # its labels go with the old frame
         if self.frame:
             self.frame.destroy()
         self.frame = frame
         frame.pack(fill="both", expand=True)
+
+    def style_tree(self):
+        # Treeview tags are not widgets, so they're re-coloured here rather than by _recolour.
+        self.tree.tag_configure("expired", foreground=DANGER)
 
     def status(self, msg):
         if hasattr(self, "status_lbl") and self.status_lbl.winfo_exists():
@@ -535,8 +743,15 @@ class App:
         self.show_unlock(msg)
 
     def quit(self):
+        # Pending timers must be cancelled, not just ignored: one that fires after destroy would hit
+        # a deleted Tcl command.
         if self.clip_job:
+            self.root.after_cancel(self.clip_job)
             self.clear_clipboard()
+        if self.lock_job:
+            self.root.after_cancel(self.lock_job)
+            self.lock_job = None
+        self.stop_totp()
         self.root.destroy()
 
     def save(self) -> bool:
@@ -661,6 +876,7 @@ class App:
         se.focus_set()
         ttk.Label(bar, text="  search all groups", style="Muted.TLabel").pack(side="left")
         for text, cmd, style in [("🔒 Lock", self.lock, "TButton"),
+                                 (theme_label(read_theme_choice()), self.cycle_theme, "TButton"),
                                  ("Database ▾", self.database_menu, "TButton"),
                                  ("Generator", lambda: GeneratorDialog(self), "TButton"),
                                  ("+ Add", self.add_entry, "Accent.TButton")]:
@@ -668,6 +884,8 @@ class App:
             b.pack(side="right", padx=2)
             if text.startswith("Database"):
                 self.db_btn = b
+            elif text.startswith("Theme"):
+                self.theme_btn = b
 
         body = ttk.Frame(f)
         body.pack(fill="both", expand=True)
@@ -696,7 +914,7 @@ class App:
         for col, label, w in cols:
             self.tree.heading(col, text=label, command=lambda c=col: self.sort_by(c))
             self.tree.column(col, width=w, anchor="w")
-        self.tree.tag_configure("expired", foreground=DANGER)
+        self.style_tree()
         sb = ttk.Scrollbar(mid, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=sb.set)
         self.tree.pack(side="left", fill="both", expand=True)
@@ -719,15 +937,17 @@ class App:
         self.tree.bind("<Delete>", lambda e: self.delete_selected())
         self.root.bind_all("<Control-c>", lambda e: self.shortcut_copy("password", e))
         self.root.bind_all("<Control-b>", lambda e: self.shortcut_copy("username", e))
+        self.root.bind_all("<Control-t>", lambda e: self.shortcut_copy("otp", e))
         self.root.bind("<Control-n>", lambda e: self.add_entry())
         self.root.bind("<Control-f>", lambda e: se.focus_set())
         self.root.bind("<Control-l>", lambda e: self.lock())
+        self.root.bind("<Control-Shift-B>", lambda e: self.open_backups())
 
         self.sort_col = "title"
         self.current_group = self.vault.root
         self.refresh_groups()
-        self.status("Double-click a field to copy it · "
-                    f"Ctrl+C copy password · Ctrl+B copy username · auto-locks after {AUTO_LOCK_SECONDS // 60} min idle")
+        self.status("Double-click a field to copy it · Ctrl+C copy password · Ctrl+B copy username · "
+                    f"Ctrl+T copy 2FA code · auto-locks after {AUTO_LOCK_SECONDS // 60} min idle")
 
     # ---------------------------------------------------------- groups
 
@@ -856,6 +1076,7 @@ class App:
         return self.items.get(sel[0]) if sel else None
 
     def show_detail(self):
+        self.stop_totp()
         for w in self.detail.winfo_children():
             w.destroy()
         e = self.selected()
@@ -896,6 +1117,24 @@ class App:
 
         row("USERNAME", e.username, "username")
         row("PASSWORD", e.password, "password", secret=True)
+        try:
+            totp, unreadable = pwvault.entry_totp(e), False
+        except VaultError:
+            totp, unreadable = None, True
+        if totp or unreadable:
+            ttk.Label(d, text="ONE-TIME CODE", style="PanelMuted.TLabel", font=("Sans", 8, "bold")).pack(anchor="w")
+        if unreadable:
+            ttk.Label(d, text="unreadable TOTP settings", style="PanelMuted.TLabel").pack(anchor="w", pady=(0, 8))
+        elif totp:
+            line = ttk.Frame(d, style="Panel.TFrame")
+            line.pack(fill="x", pady=(0, 8))
+            ttk.Button(line, text="Copy", width=5, command=self.copy_totp).pack(side="right")
+            self.totp_code = ttk.Label(line, style="Panel.TLabel", font=("Monospace", 12))
+            self.totp_code.pack(side="left")
+            self.totp_code.bind("<Double-1>", lambda ev: self.copy_totp())
+            self.totp_left = ttk.Label(line, style="PanelMuted.TLabel")
+            self.totp_left.pack(side="left", padx=8)
+            self.tick_totp(totp)
         row("URL", e.url, "url")
         if e.notes:
             row("NOTES", e.notes, "notes")
@@ -928,6 +1167,29 @@ class App:
             ttk.Button(btns, text=text, command=cmd, style=style, width=1).grid(
                 row=0, column=i, sticky="ew", padx=(0 if i == 0 else 4, 0))
 
+    def tick_totp(self, totp):
+        code, left = pwvault.totp_code(totp)
+        self.totp_code.configure(text=pwvault.fmt_totp_code(code))
+        self.totp_left.configure(text=f"{left}s")
+        # Wake just after the next whole second, when the countdown (and maybe the code) changes.
+        delay = 1000 - int(time() * 1000) % 1000 + 20
+        self.totp_job = self.root.after(delay, self.tick_totp, totp)
+
+    def stop_totp(self):
+        if self.totp_job:
+            self.root.after_cancel(self.totp_job)
+            self.totp_job = None
+
+    def copy_totp(self):
+        e = self.selected()
+        try:
+            totp = pwvault.entry_totp(e) if e else None
+        except VaultError:
+            totp = None
+        if totp:
+            e.touch()  # access time, written with the next save
+            self.copy(pwvault.totp_code(totp)[0], "One-time code")  # computed now, not read off the label
+
     def copy_field(self, key):
         e = self.selected()
         if e:
@@ -941,7 +1203,7 @@ class App:
             return
         if isinstance(w, tk.Text) and w.tag_ranges("sel"):
             return
-        self.copy_field(key)
+        self.copy_totp() if key == "otp" else self.copy_field(key)
         return "break"
 
     def save_attachment(self, att):
@@ -993,12 +1255,27 @@ class App:
             self.show_group(self.vault.root, select=e)
             self.status(f"Restored '{e.title}' to {self.vault.root.name}.")
 
+    def cycle_theme(self):
+        current = read_theme_choice()
+        self.set_theme(THEME_CHOICES[(THEME_CHOICES.index(current) + 1) % len(THEME_CHOICES)])
+
+    def set_theme(self, choice: str):
+        try:
+            write_theme_choice(choice)
+        except OSError as err:
+            messagebox.showerror("Theme", f"Couldn't save the theme: {err}", parent=self.root)
+            return
+        self.theme_btn.configure(text=theme_label(choice))
+        switch_palette(self.root, theme_name(choice))
+        self.style_tree()
+        self.status(f"Theme set to {choice}.")
+
     # ---------------------------------------------------------- database menu
 
     def database_menu(self):
-        m = tk.Menu(self.root, tearoff=0, bg=PANEL, fg=FG, activebackground=ACCENT, activeforeground="#fff")
+        m = tk.Menu(self.root, tearoff=0, bg=PANEL, fg=FG, activebackground=ACCENT, activeforeground=ON_ACCENT)
         m.add_command(label="Import CSV…", command=self.import_csv)
-        exp = tk.Menu(m, tearoff=0, bg=PANEL, fg=FG, activebackground=ACCENT, activeforeground="#fff")
+        exp = tk.Menu(m, tearoff=0, bg=PANEL, fg=FG, activebackground=ACCENT, activeforeground=ON_ACCENT)
         for fmt in pwvault.EXPORT_FORMATS:
             exp.add_command(label=fmt.upper() + {"csv": "  (safe to open in a spreadsheet)",
                                                  "xml": "  (KeePass XML)"}.get(fmt, ""),
@@ -1008,6 +1285,7 @@ class App:
                                 command=lambda: self.export("csv", raw=True))
         m.add_cascade(label="Export", menu=exp)
         m.add_separator()
+        m.add_command(label="Backups…", command=self.open_backups)
         m.add_command(label="Empty recycle bin…", command=self.empty_bin)
         m.add_command(label="Change master key…", command=lambda: ChangeMasterDialog(self))
         m.add_separator()
@@ -1019,6 +1297,10 @@ class App:
             parent=self.root))
         b = self.db_btn
         m.tk_popup(b.winfo_rootx(), b.winfo_rooty() + b.winfo_height())
+
+    def open_backups(self):
+        if self.vault is not None:  # the shortcut also fires on the unlock screen, where there's no vault
+            BackupsDialog(self)
 
     def empty_bin(self):
         if not messagebox.askyesno("Empty recycle bin", "Permanently delete everything in the recycle bin?",
