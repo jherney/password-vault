@@ -11,27 +11,28 @@ about: "pwvault"
 See: .paul/PROJECT.md (updated 2026-10-30)
 
 **Core value:** I can keep all my passwords in one encrypted local vault that I control, use it from the terminal or a GUI, and still open it in KeePass-compatible apps.
-**Current focus:** v1.3 — Phase 2 TOTP codes
+**Current focus:** v1.3 — Phase 3 GUI polish (next)
 
 ## Current Position
 
 Milestone: v1.3 Hardening, TOTP, Backups & Release
-Phase: 2 of 5 (TOTP codes)
+Phase: 3 of 5 (GUI polish) — Not started
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-10-30 — Phase 1 complete (01-01 unified), transitioned to Phase 2
+Last activity: 2026-10-30 — Phase 2 complete (02-01 unified; TOTP codes in CLI and GUI)
 
 Progress:
-- Milestone: [██░░░░░░░░] 20%
+- Milestone: [████░░░░░░] 40%
 - Phase 1: [██████████] 100% ✓
-- Phase 2: [░░░░░░░░░░] 0%
+- Phase 2: [██████████] 100% ✓
+- Phase 3: [░░░░░░░░░░] 0%
 
 ## Loop Position
 
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ○        ○        ○     [Phase 1 loop closed - ready to PLAN Phase 2]
+  ✓        ✓        ✓     [Loop complete - ready for next PLAN]
 ```
 
 ## Accumulated Context
@@ -46,22 +47,33 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Delete old-key backups after a verified re-key | Phase 1 | Leaked old password can't open leftover backups |
 | All vault writes go through `Vault._write()` (lock, conflict check, backup, atomic write, prune) | Phase 1 | New save paths get backups for free |
 | A failed backup fails the save; a failed prune never does | Phase 1 | Backup dir can briefly hold more than 10 |
+| Setting or clearing `otp` drops legacy TOTP Seed/Settings | Phase 2 | Only one TOTP secret per entry |
+| Reading a code never saves the vault | Phase 2 | No backup created by `totp` copy |
 
 ### Deferred Issues
 
-None yet.
+- Phase 2: TOTP in CSV import/export (LastPass `totp`, 1Password `OTPAuth`, Bitwarden `login_totp`)
+- Phase 2: KeePass 2 native `TimeOtp-*` fields not read
+- Phase 2: real KeePassXC not run on this machine; interop covered by RFC vectors, sample entries, and phone check
 
 ### Blockers/Concerns
 
-- Phase 1: backups weren't opened in real KeePassXC (not installed); verified with pykeepass. Check once KeePassXC is available.
+- Phase 1: ~~backups not opened in real KeePassXC~~ resolved 2026-10-30: a backup opens in keepassxc-cli 2.8.0 with correct TOTP.
 - Phase 1: after a re-key, only the purge keeps old-key backups from lingering; revisit in Phase 4's security review.
+
+### Git State
+
+Last commit: d492c75 (Phase 1)
+Branch: qa-fixes-2026-10-28
+Feature branches merged: none
+Uncommitted: Phase 2 code (`pwvault.py`, `pwvault_gui.py`, `README.md`, `tests/test_totp.py`) and `.paul/` files. Phase 2 commit not yet created (see Session Continuity).
 
 ## Session Continuity
 
 Last session: 2026-10-30
-Stopped at: Phase 1 complete, ready to plan Phase 2
-Next action: /paul:plan for Phase 2 (TOTP codes)
-Resume file: .paul/ROADMAP.md
+Stopped at: Phase 2 UNIFY complete; phase-transition git commit not yet created
+Next action: /paul:plan for Phase 3 (GUI polish)
+Resume file: .paul/phases/02-totp-codes/02-01-SUMMARY.md
 
 ---
 *STATE.md — Updated after every significant action*

@@ -44,7 +44,7 @@ I can keep all my passwords in one encrypted local vault that I control, use it 
 
 ### Active (In Progress)
 
-- [ ] TOTP/2FA codes via KeePassXC's `otp` attribute — Phase 2
+- ✓ TOTP/2FA codes via KeePassXC's `otp` attribute (CLI and GUI, RFC 6238 generator) — Phase 2
 
 ### Planned (Next)
 
@@ -87,8 +87,8 @@ I can keep all my passwords in one encrypted local vault that I control, use it 
 
 | Metric | Target | Current | Status |
 |--------|--------|---------|--------|
-| CI test suite | All existing + new tests pass | 72 passing | On track |
-| TOTP interoperability | Codes match KeePassXC for same entry | - | Not started |
+| CI test suite | All existing + new tests pass | 126 passing | On track |
+| TOTP interoperability | Codes match KeePassXC for same entry | RFC vectors + phone check pass; real KeePassXC not run here | Met (partial evidence) |
 | Save safety | Failed/interrupted save never corrupts vault; last N backups restorable | Met (Phase 1) | ✓ |
 | Distribution | `pip install pwvault` from PyPI; GUI in desktop app menu | - | Not started |
 | Security review | `/cso` finds no high-severity issues in changes | - | Not started |
@@ -113,4 +113,4 @@ I can keep all my passwords in one encrypted local vault that I control, use it 
 
 ---
 *Created: 2026-10-30*
-*Last updated: 2026-10-30 after Phase 1*
+*Last updated: 2026-10-30 after Phase 2*

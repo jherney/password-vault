@@ -14,14 +14,14 @@ Take pwvault from 1.2.0 to a hardened, distributable release: fix remaining edge
 
 **v1.3 Hardening, TOTP, Backups & Release** (v1.3.0)
 Status: In progress
-Phases: 1 of 5 complete (20%)
+Phases: 2 of 5 complete (40%)
 
 ## Phases
 
 | Phase | Name | Plans | Status | Completed |
 |-------|------|-------|--------|-----------|
 | 1 | Safe saves & backups | 1/1 | ✅ Complete | 2026-10-30 |
-| 2 | TOTP codes | TBD | Not started | - |
+| 2 | TOTP codes | 1/1 | ✅ Complete | 2026-10-30 |
 | 3 | GUI polish | TBD | Not started | - |
 | 4 | Security review & hardening | TBD | Not started | - |
 | 5 | Packaging & release | TBD | Not started | - |
@@ -43,7 +43,7 @@ Phases: 1 of 5 complete (20%)
 **Plans:**
 - [x] 01-01: Backups on save, CLI restore, interrupted-save tests
 
-### Phase 2: TOTP codes
+### Phase 2: TOTP codes ✅
 
 **Goal:** Store and generate TOTP codes compatible with KeePassXC's `otp` attribute, in CLI and GUI
 **Depends on:** Phase 1 (saves are backed up)
@@ -54,6 +54,9 @@ Phases: 1 of 5 complete (20%)
 - Stdlib TOTP (RFC 6238) generator
 - CLI: set TOTP on an entry, copy the current code
 - GUI: show the live code with a countdown, copy it
+
+**Plans:**
+- [x] 02-01: TOTP core (RFC 6238, KeePassXC formats), `pwvault totp` CLI, GUI live code
 
 ### Phase 3: GUI polish
 
@@ -89,4 +92,4 @@ Phases: 1 of 5 complete (20%)
 
 ---
 *Roadmap created: 2026-10-30*
-*Last updated: 2026-10-30 after Phase 1*
+*Last updated: 2026-10-30 after Phase 2*

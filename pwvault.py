@@ -12,15 +12,18 @@ Security model:
   * Attachment data is pruned from the file when no entry or history version uses it
 
 Features: nested groups, entry history, recycle bin, expiry dates, file attachments,
+TOTP (2FA) codes stored the way KeePassXC stores them,
 import from browser / KeePass / Bitwarden / LastPass / 1Password CSV exports,
 export to CSV, HTML, XML and TXT, and a configurable password generator.
 """
 
 import argparse
+import base64
 import csv
 import fcntl
 import getpass
 import hashlib
+import hmac
 import html
 import io
 import json
@@ -30,9 +33,13 @@ import secrets
 import shutil
 import stat
 import string
+import struct
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.parse
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -401,22 +408,24 @@ class Vault:
                     and any(q in (v or "").lower() for v in (e.title, e.username, e.url, e.notes))]
         return list((group or self.root).entries)
 
-    def add_entry(self, group, title, username, password, url="", notes="", expiry=None):
+    def add_entry(self, group, title, username, password, url="", notes="", expiry=None, otp=""):
         # pykeepass puts title and username into an XPath duplicate check (pointless with
         # force_creation) that breaks on a double quote, so set them afterwards.
         entry = self.kp.add_entry(group or self.root, "", "", password or "",
                                   url=url or None, notes=notes or None, force_creation=True)
         entry.title, entry.username = title or "", username or ""
         set_expiry(entry, expiry)
+        set_otp(entry, otp)
         return entry
 
-    FIELDS = ("title", "username", "password", "url", "notes")
+    # "otp" holds the TOTP setting; callers pass it through normalize_totp() first.
+    FIELDS = ("title", "username", "password", "url", "notes", "otp")
 
     def update_entry(self, entry, fields: dict, group=None, expiry=KEEP,
                      add_attachments=(), remove_attachments=()) -> None:
         """Apply changes, archiving the previous version in the entry's history first.
         Changing nothing is a no-op: it adds no history version and doesn't touch the entry."""
-        changed = (any(k in fields and (fields[k] or "") != (getattr(entry, k) or "") for k in self.FIELDS)
+        changed = (any(k in fields and field_differs(entry, k, fields[k]) for k in self.FIELDS)
                    or (expiry is not KEEP and expiry != (entry.expiry_time if entry.expires else None))
                    or bool(add_attachments) or bool(remove_attachments)
                    or (group is not None and group.uuid != entry.group.uuid))
@@ -426,7 +435,9 @@ class Vault:
         while len(entry.history) > HISTORY_MAX:
             entry.delete_history(entry.history[0])  # oldest first
         for k in self.FIELDS:
-            if k in fields:
+            if k == "otp" and k in fields:
+                set_otp(entry, fields[k])
+            elif k in fields:
                 setattr(entry, k, fields[k] or "")
         if expiry is not KEEP:
             set_expiry(entry, expiry)
@@ -440,8 +451,17 @@ class Vault:
 
     def restore_history(self, entry, version) -> None:
         """Make an old version current again (the current one goes into history)."""
-        self.update_entry(entry, {k: getattr(version, k) for k in self.FIELDS},
-                          expiry=version.expiry_time if version.expires else None)
+        fields = {k: getattr(version, k) for k in self.FIELDS}
+        if not version.otp and version.get_custom_property("TOTP Seed"):
+            # The old version kept its TOTP in the legacy fields. If the entry still does, leave
+            # them alone; if it has since moved to "otp", bring the old secret back there.
+            del fields["otp"]
+            if entry.otp:
+                try:
+                    fields["otp"] = totp_uri(entry_totp(version), version.title, version.username)
+                except VaultError:
+                    pass  # unreadable then, unreadable now: keep the current setting
+        self.update_entry(entry, fields, expiry=version.expiry_time if version.expires else None)
 
     def delete_entry(self, entry) -> None:
         """Move to the recycle bin; delete permanently if it is already there."""
@@ -463,6 +483,33 @@ class Vault:
 
     def add_attachment(self, entry, name: str, data: bytes):
         return entry.add_attachment(self.kp.add_binary(data), name)
+
+
+def field_differs(entry, key: str, value) -> bool:
+    if key == "otp":  # no TOTP differs from a TOTP kept in the legacy fields
+        return (value or "") != (entry.otp or "") or (not value and bool(entry.get_custom_property("TOTP Seed")))
+    return (value or "") != (getattr(entry, key) or "")
+
+
+def set_otp(entry, value: str) -> None:
+    """Store a TOTP setting in "otp" (protected, as KeePassXC does), or remove the entry's TOTP if
+    value is empty. A change also drops the legacy TOTP fields, so an entry never holds two secrets."""
+    if not field_differs(entry, "otp", value):
+        return
+    for key in TOTP_LEGACY_FIELDS:
+        remove_string_field(entry, key)
+    if value:
+        entry.otp = value
+    else:
+        remove_string_field(entry, "otp")
+
+
+def remove_string_field(entry, key: str) -> None:
+    # pykeepass's delete_custom_property() refuses "otp" (a reserved key) and builds an XPath
+    # from the key, so compare the Key text directly.
+    for s in entry._element.findall("String"):
+        if s.findtext("Key") == key:
+            entry._element.remove(s)
 
 
 def set_expiry(entry, expiry) -> None:
@@ -519,6 +566,138 @@ def strength(password: str) -> tuple:
     bits = int(len(password) * math.log2(pool)) if password and pool else 0
     label = "weak" if bits < 50 else "fair" if bits < 75 else "strong" if bits < 110 else "very strong"
     return bits, label
+
+
+# ---------------------------------------------------------------- TOTP (2FA) codes
+
+# Stored the way KeePassXC stores it: an otpauth:// URI in the entry's "otp" field. Also read, as
+# KeePassXC does: KeeOtp's "key=…&step=…&size=…" in that field, and the older KeeTrayTOTP fields
+# "TOTP Seed" + "TOTP Settings" ("30;6", or "30;S" for Steam).
+TOTP_LEGACY_FIELDS = ("TOTP Seed", "TOTP Settings")
+TOTP_ALGORITHMS = {"SHA1": "sha1", "SHA256": "sha256", "SHA512": "sha512"}
+STEAM_ALPHABET = "23456789BCDFGHJKMNPQRTVWXY"
+
+
+@dataclass(frozen=True)
+class Totp:
+    secret: bytes
+    digits: int = 6
+    period: int = 30
+    algorithm: str = "SHA1"
+    steam: bool = False  # Steam Guard: characters from STEAM_ALPHABET instead of digits
+
+
+def _totp_secret(text: str) -> bytes:
+    """Decode base32 as sites display it: any case, with spaces or dashes, padding optional."""
+    s = "".join(text.split()).replace("-", "").upper().rstrip("=")
+    try:
+        secret = base64.b32decode(s + "=" * (-len(s) % 8))
+    except ValueError:  # includes binascii.Error and non-ASCII input
+        raise VaultError("TOTP secret isn't valid base32")
+    if not secret:
+        raise VaultError("TOTP secret is empty")
+    return secret
+
+
+def _make_totp(secret: str, digits, period, algorithm="SHA1", steam=False) -> Totp:
+    algo = (algorithm or "SHA1").upper().replace("-", "")
+    if algo not in TOTP_ALGORITHMS:
+        raise VaultError(f"unknown TOTP algorithm {algorithm}")
+    try:
+        period = int(period)
+    except (TypeError, ValueError):
+        period = 0
+    if period <= 0:
+        raise VaultError("TOTP period must be a positive number of seconds")
+    # Steam codes are 5 characters. KeePassXC makes them as long as an otpauth URI's digits=
+    # (it writes digits=5 itself), so honour that, but default to Steam's 5 rather than its 6.
+    low = 5 if steam else 6
+    try:
+        digits = int(digits if digits not in (None, "") else low)
+    except (TypeError, ValueError):
+        digits = 0
+    if not low <= digits <= 10:
+        raise VaultError(f"TOTP digits must be {low}–10")
+    return Totp(_totp_secret(secret), digits, period, algo, steam)
+
+
+def parse_totp(text: str) -> Totp:
+    """Read an otpauth://totp URI or a KeeOtp "key=…" string, as KeePassXC does."""
+    text = (text or "").strip()
+    if text.lower().startswith("otpauth://"):
+        url = urllib.parse.urlsplit(text)
+        kind = url.netloc.lower()
+        if kind == "hotp":
+            raise VaultError("HOTP (counter-based) codes aren't supported")
+        if kind != "totp":
+            raise VaultError("TOTP setting isn't an otpauth://totp URI")
+        q = {k.lower(): v for k, v in urllib.parse.parse_qsl(url.query)}
+        return _make_totp(q.get("secret", ""), q.get("digits"), q.get("period", 30),
+                          q.get("algorithm", "SHA1"), q.get("encoder", "").lower() == "steam")
+    q = {k.lower(): v for k, v in urllib.parse.parse_qsl(text)}
+    if "key" in q:
+        return _make_totp(q["key"], q.get("size", 6), q.get("step", 30), q.get("otphashmode", "SHA1"))
+    raise VaultError("TOTP setting isn't an otpauth:// URI or a KeeOtp key=… string")
+
+
+def entry_totp(entry):
+    """The entry's TOTP settings, or None if it has none. Raises VaultError if they're unreadable."""
+    if entry.otp:
+        return parse_totp(entry.otp)
+    seed = entry.get_custom_property("TOTP Seed")
+    if not seed:
+        return None
+    period, digits = ((entry.get_custom_property("TOTP Settings") or "").split(";") + ["", ""])[:2]
+    steam = digits.strip().upper() == "S"
+    return _make_totp(seed, None if steam else digits.strip(), period.strip() or 30, steam=steam)
+
+
+def totp_code(t: Totp, now=None) -> tuple:
+    """(current code, seconds until it changes), per RFC 6238 (and Steam's variant of it)."""
+    now = int(time.time() if now is None else now)
+    counter, elapsed = divmod(now, t.period)
+    mac = hmac.new(t.secret, struct.pack(">Q", counter), TOTP_ALGORITHMS[t.algorithm]).digest()
+    offset = mac[-1] & 0x0F
+    n = int.from_bytes(mac[offset:offset + 4], "big") & 0x7FFFFFFF  # RFC 4226 dynamic truncation
+    if t.steam:
+        code = ""
+        for _ in range(t.digits):
+            n, i = divmod(n, len(STEAM_ALPHABET))
+            code += STEAM_ALPHABET[i]
+    else:
+        code = str(n % 10 ** t.digits).zfill(t.digits)
+    return code, t.period - elapsed
+
+
+def fmt_totp_code(code: str) -> str:
+    """'123 456', '1234 5678'; Steam codes as they are. For display only, never for copying."""
+    if not code.isdigit():
+        return code
+    half = (len(code) + 1) // 2
+    return f"{code[:half]} {code[half:]}"
+
+
+def totp_uri(t: Totp, title: str, username: str) -> str:
+    """The otpauth URI KeePassXC writes for these settings."""
+    issuer = urllib.parse.quote(title or "pwvault", safe="")
+    secret = base64.b32encode(t.secret).decode().rstrip("=")
+    uri = (f"otpauth://totp/{issuer}:{urllib.parse.quote(username or '', safe='')}"
+           f"?secret={secret}&period={t.period}&digits={t.digits}&issuer={issuer}")
+    if t.steam:
+        uri += "&encoder=steam"
+    if t.algorithm != "SHA1":
+        uri += f"&algorithm={t.algorithm}"
+    return uri
+
+
+def normalize_totp(text: str, title: str = "", username: str = "") -> str:
+    """What to store in "otp" for what the user typed: a valid otpauth URI as is (KeePassXC keeps
+    extra parameters too), or a bare base32 secret as a standard 30 s / 6-digit URI."""
+    text = (text or "").strip()
+    if text.lower().startswith("otpauth://"):
+        parse_totp(text)
+        return text
+    return totp_uri(Totp(_totp_secret(text)), title, username)
 
 
 # ---------------------------------------------------------------- clipboard
@@ -871,10 +1050,44 @@ def cmd_get(args):
         print(f"Notes:    {e.notes}")
     if e.expires:
         print(f"Expires:  {fmt_time(e.expiry_time)}" + ("  (EXPIRED)" if e.expired else ""))
+    try:
+        if entry_totp(e):
+            print(f"TOTP:     set — `pwvault totp {args.query}`")
+    except VaultError as err:
+        print(f"TOTP:     unreadable ({err})")
     if args.show:
         print(f"Password: {e.password}")
     else:
         copy_and_report(e)
+
+
+def cmd_totp(args):
+    vault = unlock(args)
+    e = pick_one(find(vault, args.query), args.query)
+    if args.set:
+        value = normalize_totp(getpass.getpass("TOTP secret or otpauth:// URI: "), e.title, e.username)
+        vault.update_entry(e, {"otp": value})
+        vault.save()
+        code, left = totp_code(entry_totp(e))
+        return print(f"TOTP set for '{e.title}'. Current code: {fmt_totp_code(code)} ({left}s left).")
+    if args.clear:
+        if not field_differs(e, "otp", ""):
+            raise VaultError(f"'{e.title}' has no TOTP secret")
+        if input(f"Remove the TOTP secret from '{e.title}'? [y/N] ").lower() != "y":
+            return print("Cancelled.")
+        vault.update_entry(e, {"otp": ""})
+        vault.save()
+        return print("TOTP removed.")
+    totp = entry_totp(e)
+    if totp is None:
+        raise VaultError(f"'{e.title}' has no TOTP secret — add one with `pwvault totp {args.query} --set`")
+    code, left = totp_code(totp)
+    if args.show:
+        print(f"{fmt_totp_code(code)}  ({left}s left)")
+    elif copy_to_clipboard(code):
+        print(f"Code copied to clipboard (valid {left}s more; clipboard clears in {CLIPBOARD_CLEAR_SECONDS}s).")
+    else:
+        print("No clipboard tool found (install wl-clipboard or xclip); use --show to print it.")
 
 
 def cmd_add(args):
@@ -1019,6 +1232,14 @@ def main():
     p.add_argument("query")
     p.add_argument("--show", action="store_true", help="print the password instead")
     p.set_defaults(fn=cmd_get)
+
+    p = sub.add_parser("totp", help="copy the current 2FA (TOTP) code, or set/clear the secret")
+    p.add_argument("query")
+    p.add_argument("--show", action="store_true", help="print the code instead")
+    change = p.add_mutually_exclusive_group()
+    change.add_argument("--set", action="store_true", help="set the secret (asked for, hidden)")
+    change.add_argument("--clear", action="store_true", help="remove the secret")
+    p.set_defaults(fn=cmd_totp)
 
     p = sub.add_parser("add", help="add an entry")
     p.add_argument("-g", "--generate", action="store_true", help="generate the password")

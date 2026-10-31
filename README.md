@@ -15,6 +15,7 @@ A small, local password manager. Your vault is a standard KeePass (`.kdbx`) file
 - Clipboard copy that clears itself after 20 seconds
 - Auto-lock after 5 minutes idle (see [Auto-lock](#auto-lock))
 - Automatic backup of the previous vault on every save, last 10 kept (see [Backups](#backups))
+- TOTP (2FA) codes, stored KeePassXC-compatibly (see [TOTP codes](#totp-2fa-codes))
 
 ## Requirements
 
@@ -53,6 +54,8 @@ The default vault is `~/.local/share/pwvault/vault.kdbx`. Override it with `--va
 | `export {csv,html,xml,txt} OUT [--raw]` | Export every entry. **The output is not encrypted.** `--raw` writes CSV values exactly (see below) |
 | `list [QUERY] [--group PATH]` | List entries, hiding passwords |
 | `get QUERY [--show]` | Copy a password to the clipboard, or print it with `--show` |
+| `totp QUERY [--show]` | Copy the entry's current 2FA code, or print it with `--show` |
+| `totp QUERY --set` / `--clear` | Set (asked for, hidden) or remove the entry's TOTP secret |
 | `add [-g] [-l LEN] [--group PATH]` | Add an entry; `-g` generates the password |
 | `remove QUERY` | Move an entry to the recycle bin |
 | `trash {list,restore,empty} [QUERY]` | Work with the recycle bin |
@@ -75,6 +78,7 @@ The GUI offers search across all groups, add/edit with a password generator, ent
 |---|---|
 | Ctrl+C | Copy the password of the selected entry |
 | Ctrl+B | Copy the username |
+| Ctrl+T | Copy the current one-time (TOTP) code |
 | Ctrl+N | New entry |
 | Ctrl+F | Focus search |
 | Ctrl+L | Lock the vault |
@@ -96,6 +100,21 @@ python3 pwvault.py backup restore 2   # asks for the master password
 A backup is a complete `.kdbx` file, encrypted with the master key that was in use when it was made, so it also opens in KeePassXC. `restore` checks that the backup opens with the vault's current key before it changes anything, and backs up the current vault first, so a restore can itself be undone.
 
 Changing the master key (`passwd` or the GUI) deletes the existing backups once the re-keyed vault is saved, because they would still open with the old password. The files are deleted, not overwritten: on SSDs and copy-on-write filesystems overwriting wouldn't remove old copies anyway.
+
+## TOTP (2FA) codes
+
+An entry can hold the secret behind a site's two-factor codes. Paste either the secret the site shows (spaces and lower case are fine) or an `otpauth://totp/…` link:
+
+```bash
+python3 pwvault.py totp github --set    # asks for the secret, hidden
+python3 pwvault.py totp github          # copies the current code (clears like a password)
+python3 pwvault.py totp github --show   # prints it instead
+python3 pwvault.py totp github --clear
+```
+
+In the GUI, set it in the entry's TOTP field. The detail panel then shows the current code with a countdown, and Ctrl+T copies it.
+
+The secret is stored the way KeePassXC stores it: as an `otpauth://` link in the entry's protected `otp` field, so codes match in KeePassXC and other apps that read it. pwvault also reads the older formats KeePassXC accepts (KeeOtp's `key=…` in `otp`, and the `TOTP Seed` / `TOTP Settings` fields), including SHA-256/512, 6–10 digits, custom periods and Steam Guard codes. Setting or clearing a secret replaces the older fields. Counter-based (HOTP) codes aren't supported.
 
 ## Security model
 

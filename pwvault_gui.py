@@ -8,7 +8,7 @@ import os
 import sys
 import tkinter as tk
 from pathlib import Path
-from time import monotonic
+from time import monotonic, time
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -176,17 +176,25 @@ class EntryDialog(Dialog):
         ttk.Label(b, text="URL").grid(row=4, column=0, sticky="w", pady=4)
         ttk.Entry(b, textvariable=self.vars["url"], width=44).grid(row=4, column=1, columnspan=2, sticky="ew")
 
-        ttk.Label(b, text="Group").grid(row=5, column=0, sticky="w", pady=4)
+        # Only a changed TOTP field is saved, so editing other fields leaves legacy TOTP storage be.
+        self.otp_initial = self.initial_otp(entry)
+        self.otp = tk.StringVar(value=self.otp_initial)
+        ttk.Label(b, text="TOTP").grid(row=5, column=0, sticky="w", pady=4)
+        PasswordField(b, self.otp, width=32).grid(row=5, column=1, columnspan=2, sticky="ew")
+        ttk.Label(b, text="2FA secret or otpauth:// URI, optional", style="Muted.TLabel").grid(
+            row=6, column=1, sticky="w")
+
+        ttk.Label(b, text="Group").grid(row=7, column=0, sticky="w", pady=4)
         self.groups = v.groups()
         self.group_names = [v.group_path(g) for g in self.groups]
         current = entry.group if entry and not v.in_recycle_bin(entry) else (group or v.root)
         self.group = tk.StringVar(value=v.group_path(current))
         ttk.Combobox(b, textvariable=self.group, values=self.group_names, state="readonly").grid(
-            row=5, column=1, columnspan=2, sticky="ew")
+            row=7, column=1, columnspan=2, sticky="ew")
 
-        ttk.Label(b, text="Expires").grid(row=6, column=0, sticky="w", pady=4)
+        ttk.Label(b, text="Expires").grid(row=8, column=0, sticky="w", pady=4)
         exp = ttk.Frame(b)
-        exp.grid(row=6, column=1, columnspan=2, sticky="w")
+        exp.grid(row=8, column=1, columnspan=2, sticky="w")
         has_expiry = bool(entry and entry.expires)
         self.expires = tk.BooleanVar(value=has_expiry)
         self.expiry = tk.StringVar(value=entry.expiry_time.astimezone().strftime("%Y-%m-%d") if has_expiry else "")
@@ -196,18 +204,18 @@ class EntryDialog(Dialog):
         ttk.Label(exp, text="  YYYY-MM-DD", style="Muted.TLabel").pack(side="left")
         self.toggle_expiry()
 
-        ttk.Label(b, text="Notes").grid(row=7, column=0, sticky="nw", pady=4)
+        ttk.Label(b, text="Notes").grid(row=9, column=0, sticky="nw", pady=4)
         self.notes = tk.Text(b, width=44, height=4, bg=PANEL, fg=FG, insertbackground=FG,
                              relief="flat", wrap="word", font=("Sans", 10))
         self.notes.insert("1.0", (entry.notes or "") if entry else "")
-        self.notes.grid(row=7, column=1, columnspan=2, sticky="ew", pady=4)
+        self.notes.grid(row=9, column=1, columnspan=2, sticky="ew", pady=4)
 
         # Attachment changes are staged here and applied on Save.
         self.attachments = list(entry.attachments) if entry else []
         self.to_add, self.to_remove = [], []
-        ttk.Label(b, text="Attachments").grid(row=8, column=0, sticky="nw", pady=4)
+        ttk.Label(b, text="Attachments").grid(row=10, column=0, sticky="nw", pady=4)
         att = ttk.Frame(b)
-        att.grid(row=8, column=1, columnspan=2, sticky="ew", pady=4)
+        att.grid(row=10, column=1, columnspan=2, sticky="ew", pady=4)
         self.att_list = tk.Listbox(att, height=3, bg=PANEL, fg=FG, relief="flat", highlightthickness=0,
                                    selectbackground=ACCENT)
         self.att_list.pack(side="left", fill="x", expand=True)
@@ -218,14 +226,27 @@ class EntryDialog(Dialog):
         self.refresh_attachments()
 
         self.err = ttk.Label(b, text="", style="Error.TLabel")
-        self.err.grid(row=9, column=0, columnspan=3, sticky="w")
+        self.err.grid(row=11, column=0, columnspan=3, sticky="w")
         btns = ttk.Frame(b)
-        btns.grid(row=10, column=0, columnspan=3, sticky="e", pady=(8, 0))
+        btns.grid(row=12, column=0, columnspan=3, sticky="e", pady=(8, 0))
         ttk.Button(btns, text="Cancel", command=self.destroy).pack(side="left", padx=4)
         ttk.Button(btns, text="Save", style="Accent.TButton", command=self.save).pack(side="left")
         self.bind("<Return>", lambda ev: self.save() if ev.widget is not self.notes else None)
         self.show()
         self.title_field.focus_set()
+
+    @staticmethod
+    def initial_otp(entry) -> str:
+        """What the TOTP field starts with: the otp text, or a URI made from legacy fields."""
+        if entry is None:
+            return ""
+        if entry.otp:
+            return entry.otp
+        try:
+            totp = pwvault.entry_totp(entry)
+        except VaultError:
+            return entry.get_custom_property("TOTP Seed") or ""  # shown as is, to fix or clear
+        return pwvault.totp_uri(totp, entry.title, entry.username) if totp else ""
 
     def toggle_expiry(self):
         self.expiry_entry.configure(state="normal" if self.expires.get() else "disabled")
@@ -281,12 +302,19 @@ class EntryDialog(Dialog):
             return self.err.configure(text=str(e).capitalize() + ".")
         if self.expires.get() and expiry is None:
             return self.err.configure(text="Enter an expiry date, or untick Expires.")
+        otp = self.otp.get().strip()
+        if otp != self.otp_initial.strip():
+            try:
+                f["otp"] = pwvault.normalize_totp(otp, f["title"], f["username"]) if otp else ""
+            except VaultError as e:
+                return self.err.configure(text=f"{str(e)[:1].upper()}{str(e)[1:]}.")
         group = self.groups[self.group_names.index(self.group.get())]
         if self.entry:
             v.update_entry(self.entry, f, group, expiry, self.to_add, self.to_remove)
             entry = self.entry
         else:
-            entry = v.add_entry(group, f["title"], f["username"], f["password"], f["url"], f["notes"], expiry)
+            entry = v.add_entry(group, f["title"], f["username"], f["password"], f["url"], f["notes"], expiry,
+                                f.get("otp", ""))
             for name, data in self.to_add:
                 v.add_attachment(entry, name, data)
         if self.app.save():
@@ -438,6 +466,7 @@ class App:
         self.clip_job = None
         self.clip_text = None
         self.lock_job = None
+        self.totp_job = None  # ticks the one-time code shown in the detail panel
         self.hold_since = None  # when an open dialog first deferred the idle lock
         self.current_group = None
         self.items = {}  # treeview iid -> pykeepass Entry / Group
@@ -465,6 +494,7 @@ class App:
         return self._Busy(self.root)
 
     def swap(self, frame):
+        self.stop_totp()  # its labels go with the old frame
         if self.frame:
             self.frame.destroy()
         self.frame = frame
@@ -539,6 +569,7 @@ class App:
     def quit(self):
         if self.clip_job:
             self.clear_clipboard()
+        self.stop_totp()  # a tick after destroy would hit a deleted Tcl command
         self.root.destroy()
 
     def save(self) -> bool:
@@ -721,6 +752,7 @@ class App:
         self.tree.bind("<Delete>", lambda e: self.delete_selected())
         self.root.bind_all("<Control-c>", lambda e: self.shortcut_copy("password", e))
         self.root.bind_all("<Control-b>", lambda e: self.shortcut_copy("username", e))
+        self.root.bind_all("<Control-t>", lambda e: self.shortcut_copy("otp", e))
         self.root.bind("<Control-n>", lambda e: self.add_entry())
         self.root.bind("<Control-f>", lambda e: se.focus_set())
         self.root.bind("<Control-l>", lambda e: self.lock())
@@ -728,8 +760,8 @@ class App:
         self.sort_col = "title"
         self.current_group = self.vault.root
         self.refresh_groups()
-        self.status("Double-click a field to copy it · "
-                    f"Ctrl+C copy password · Ctrl+B copy username · auto-locks after {AUTO_LOCK_SECONDS // 60} min idle")
+        self.status("Double-click a field to copy it · Ctrl+C copy password · Ctrl+B copy username · "
+                    f"Ctrl+T copy 2FA code · auto-locks after {AUTO_LOCK_SECONDS // 60} min idle")
 
     # ---------------------------------------------------------- groups
 
@@ -858,6 +890,7 @@ class App:
         return self.items.get(sel[0]) if sel else None
 
     def show_detail(self):
+        self.stop_totp()
         for w in self.detail.winfo_children():
             w.destroy()
         e = self.selected()
@@ -898,6 +931,24 @@ class App:
 
         row("USERNAME", e.username, "username")
         row("PASSWORD", e.password, "password", secret=True)
+        try:
+            totp, unreadable = pwvault.entry_totp(e), False
+        except VaultError:
+            totp, unreadable = None, True
+        if totp or unreadable:
+            ttk.Label(d, text="ONE-TIME CODE", style="PanelMuted.TLabel", font=("Sans", 8, "bold")).pack(anchor="w")
+        if unreadable:
+            ttk.Label(d, text="unreadable TOTP settings", style="PanelMuted.TLabel").pack(anchor="w", pady=(0, 8))
+        elif totp:
+            line = ttk.Frame(d, style="Panel.TFrame")
+            line.pack(fill="x", pady=(0, 8))
+            ttk.Button(line, text="Copy", width=5, command=self.copy_totp).pack(side="right")
+            self.totp_code = ttk.Label(line, style="Panel.TLabel", font=("Monospace", 12))
+            self.totp_code.pack(side="left")
+            self.totp_code.bind("<Double-1>", lambda ev: self.copy_totp())
+            self.totp_left = ttk.Label(line, style="PanelMuted.TLabel")
+            self.totp_left.pack(side="left", padx=8)
+            self.tick_totp(totp)
         row("URL", e.url, "url")
         if e.notes:
             row("NOTES", e.notes, "notes")
@@ -930,6 +981,29 @@ class App:
             ttk.Button(btns, text=text, command=cmd, style=style, width=1).grid(
                 row=0, column=i, sticky="ew", padx=(0 if i == 0 else 4, 0))
 
+    def tick_totp(self, totp):
+        code, left = pwvault.totp_code(totp)
+        self.totp_code.configure(text=pwvault.fmt_totp_code(code))
+        self.totp_left.configure(text=f"{left}s")
+        # Wake just after the next whole second, when the countdown (and maybe the code) changes.
+        delay = 1000 - int(time() * 1000) % 1000 + 20
+        self.totp_job = self.root.after(delay, self.tick_totp, totp)
+
+    def stop_totp(self):
+        if self.totp_job:
+            self.root.after_cancel(self.totp_job)
+            self.totp_job = None
+
+    def copy_totp(self):
+        e = self.selected()
+        try:
+            totp = pwvault.entry_totp(e) if e else None
+        except VaultError:
+            totp = None
+        if totp:
+            e.touch()  # access time, written with the next save
+            self.copy(pwvault.totp_code(totp)[0], "One-time code")  # computed now, not read off the label
+
     def copy_field(self, key):
         e = self.selected()
         if e:
@@ -943,7 +1017,7 @@ class App:
             return
         if isinstance(w, tk.Text) and w.tag_ranges("sel"):
             return
-        self.copy_field(key)
+        self.copy_totp() if key == "otp" else self.copy_field(key)
         return "break"
 
     def save_attachment(self, att):
