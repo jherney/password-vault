@@ -11,28 +11,28 @@ about: "pwvault"
 See: .paul/PROJECT.md (updated 2026-10-30)
 
 **Core value:** I can keep all my passwords in one encrypted local vault that I control, use it from the terminal or a GUI, and still open it in KeePass-compatible apps.
-**Current focus:** v1.3 — Phase 3 GUI polish (next)
+**Current focus:** v1.3 — Phase 3 GUI polish (plan 03-01 awaiting approval)
 
 ## Current Position
 
 Milestone: v1.3 Hardening, TOTP, Backups & Release
-Phase: 3 of 5 (GUI polish) — Not started
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-10-30 — Phase 2 complete (02-01 unified; TOTP codes in CLI and GUI)
+Phase: 3 of 5 (GUI polish) — Planning
+Plan: 03-01 created, awaiting approval
+Status: PLAN created, ready for APPLY
+Last activity: 2026-10-30 — Created .paul/phases/03-gui-polish/03-01-PLAN.md (standard track, 3 tasks + human-verify)
 
 Progress:
 - Milestone: [████░░░░░░] 40%
 - Phase 1: [██████████] 100% ✓
 - Phase 2: [██████████] 100% ✓
-- Phase 3: [░░░░░░░░░░] 0%
+- Phase 3: [░░░░░░░░░░] 0% (plan 03-01 created)
 
 ## Loop Position
 
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ✓        ✓        ✓     [Loop complete - ready for next PLAN]
+  ✓        ○        ○     [Plan 03-01 created, awaiting approval]
 ```
 
 ## Accumulated Context
@@ -71,9 +71,9 @@ Uncommitted: none
 ## Session Continuity
 
 Last session: 2026-10-30
-Stopped at: Phase 2 complete and committed (948d090)
-Next action: /paul:plan for Phase 3 (GUI polish)
-Resume file: .paul/phases/02-totp-codes/02-01-SUMMARY.md
+Stopped at: Plan 03-01 created
+Next action: Review and approve plan, then run /paul:apply .paul/phases/03-gui-polish/03-01-PLAN.md
+Resume file: .paul/phases/03-gui-polish/03-01-PLAN.md
 
 ---
 *STATE.md — Updated after every significant action*

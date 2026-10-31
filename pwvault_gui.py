@@ -4,7 +4,9 @@
 Uses the same vault file and code as the `pwvault.py` CLI.
 """
 
+import configparser
 import os
+import subprocess
 import sys
 import tkinter as tk
 from pathlib import Path
@@ -20,8 +22,100 @@ AUTO_LOCK_SECONDS = 5 * 60
 DIALOG_HOLD_SECONDS = 10 * 60
 CLIP_SECONDS = pwvault.CLIPBOARD_CLEAR_SECONDS
 
-BG, PANEL, FG, MUTED, ACCENT, DANGER = "#1e1f26", "#2a2c36", "#e6e6eb", "#9a9cab", "#6c8cff", "#e5636b"
-STRENGTH_COLORS = {"weak": DANGER, "fair": "#e0b050", "strong": "#6cc28a", "very strong": "#6cc28a"}
+# The dark palette is the look the app has always had. The light one meets 4.5:1 for body and muted text
+# against both its background and its panels.
+DARK = {"BG": "#1e1f26", "PANEL": "#2a2c36", "FG": "#e6e6eb", "MUTED": "#9a9cab", "ACCENT": "#4263eb",
+        "ACCENT_ACTIVE": "#3652c8", "BUTTON_ACTIVE": "#3a3d4a", "ON_ACCENT": "#ffffff", "DANGER": "#e5636b",
+        "FAIR": "#e0b050", "STRONG": "#6cc28a"}
+LIGHT = {"BG": "#eff0f3", "PANEL": "#fdfdfe", "FG": "#1d1f27", "MUTED": "#5b5e6b", "ACCENT": "#3b5bdb",
+         "ACCENT_ACTIVE": "#364fc7", "BUTTON_ACTIVE": "#dfe2ea", "ON_ACCENT": "#ffffff", "DANGER": "#c92a2a",
+         "FAIR": "#9a6700", "STRONG": "#2b7a4b"}
+
+
+def _kde_window_is_light(text: str):
+    """True or False from KDE's [Colors:Window] BackgroundNormal, or None if the file doesn't say."""
+    cp = configparser.ConfigParser(interpolation=None, strict=False)
+    try:
+        cp.read_string(text)
+        r, g, b = (int(x) for x in cp.get("Colors:Window", "BackgroundNormal").split(","))
+    except (configparser.Error, ValueError):
+        return None
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.5
+
+
+def detect_color_scheme(home: Path | None = None, run=subprocess.run) -> str:
+    """'light' or 'dark' from the desktop setting: KDE's window colour first, then GNOME's
+    color-scheme. Anything unreadable means dark, the app's original look."""
+    try:
+        text = ((home or Path.home()) / ".config" / "kdeglobals").read_text(errors="replace")
+    except OSError:
+        text = ""
+    kde = _kde_window_is_light(text)
+    if kde is not None:
+        return "light" if kde else "dark"
+    try:
+        out = run(["gsettings", "get", "org.gnome.desktop.interface", "color-scheme"],
+                  capture_output=True, text=True, timeout=2, check=False).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return "dark"
+    return "light" if out == "'prefer-light'" else "dark"
+
+
+THEME_CHOICES = ("system", "light", "dark")
+
+
+def settings_path(home: Path | None = None) -> Path:
+    base = os.environ.get("XDG_CONFIG_HOME")
+    return (Path(base) if base else (home or Path.home()) / ".config") / "pwvault" / "settings.ini"
+
+
+def read_theme_choice(path: Path | None = None) -> str:
+    """'system', 'light' or 'dark' as saved in settings.ini. A missing or unreadable file means 'system'."""
+    cp = configparser.ConfigParser(interpolation=None)
+    try:
+        cp.read(path or settings_path(), encoding="utf-8")
+        choice = cp.get("ui", "theme", fallback="system")
+    except (configparser.Error, OSError, ValueError):
+        return "system"
+    return choice if choice in THEME_CHOICES else "system"
+
+
+def write_theme_choice(choice: str, path: Path | None = None) -> None:
+    path = path or settings_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cp = configparser.ConfigParser(interpolation=None)
+    cp["ui"] = {"theme": choice}
+    with path.open("w", encoding="utf-8") as f:
+        cp.write(f)
+
+
+def theme_label(choice: str) -> str:
+    return f"Theme: {choice.capitalize()}"
+
+
+def theme_name(choice: str | None = None, home: Path | None = None, run=subprocess.run) -> str:
+    """'light' or 'dark': the saved choice if it's set, otherwise the desktop setting."""
+    choice = read_theme_choice() if choice is None else choice
+    if choice in ("light", "dark"):
+        return choice
+    return detect_color_scheme(home, run)
+
+
+STRENGTH_COLORS = {}
+PALETTE_NAME = ""
+
+
+def use_palette(name: str) -> None:
+    """Make 'light' or 'dark' the palette that widgets are drawn with from now on."""
+    global PALETTE_NAME, BG, PANEL, FG, MUTED, ACCENT, DANGER, ACCENT_ACTIVE, BUTTON_ACTIVE, ON_ACCENT
+    p = LIGHT if name == "light" else DARK
+    PALETTE_NAME = name
+    BG, PANEL, FG, MUTED, ACCENT, DANGER = p["BG"], p["PANEL"], p["FG"], p["MUTED"], p["ACCENT"], p["DANGER"]
+    ACCENT_ACTIVE, BUTTON_ACTIVE, ON_ACCENT = p["ACCENT_ACTIVE"], p["BUTTON_ACTIVE"], p["ON_ACCENT"]
+    STRENGTH_COLORS.update({"weak": DANGER, "fair": p["FAIR"], "strong": p["STRONG"], "very strong": p["STRONG"]})
+
+
+use_palette(theme_name())  # chosen once at startup, before any widget is built
 
 
 def apply_style(root: tk.Tk) -> None:
@@ -39,10 +133,10 @@ def apply_style(root: tk.Tk) -> None:
     s.configure("Title.TLabel", font=("Sans", 18, "bold"))
     s.configure("Error.TLabel", foreground=DANGER)
     s.configure("TButton", background=PANEL, foreground=FG, padding=(10, 5), borderwidth=0)
-    s.map("TButton", background=[("active", "#3a3d4a")])
+    s.map("TButton", background=[("active", BUTTON_ACTIVE)])
     s.configure("Small.TButton", padding=(6, 2))
-    s.configure("Accent.TButton", background=ACCENT, foreground="#ffffff")
-    s.map("Accent.TButton", background=[("active", "#5a7af0")])
+    s.configure("Accent.TButton", background=ACCENT, foreground=ON_ACCENT)
+    s.map("Accent.TButton", background=[("active", ACCENT_ACTIVE)])
     s.configure("Danger.TButton", foreground=DANGER)
     s.configure("TEntry", foreground=FG, insertcolor=FG, padding=5)
     s.configure("TCombobox", foreground=FG, arrowcolor=FG, padding=4)
@@ -52,7 +146,7 @@ def apply_style(root: tk.Tk) -> None:
     s.configure("TSpinbox", foreground=FG, arrowcolor=FG, padding=4)
     s.configure("Treeview", background=PANEL, fieldbackground=PANEL, foreground=FG, rowheight=26,
                 borderwidth=0)
-    s.map("Treeview", background=[("selected", ACCENT)], foreground=[("selected", "#ffffff")])
+    s.map("Treeview", background=[("selected", ACCENT)], foreground=[("selected", ON_ACCENT)])
     s.configure("Treeview.Heading", background=BG, foreground=MUTED, borderwidth=0,
                 font=("Sans", 9, "bold"))
     s.map("Treeview.Heading", background=[("active", BG)])
@@ -117,9 +211,37 @@ def safe_filename(name) -> str:
     return Path((name or "").replace("\\", "/")).name.lstrip(".") or "attachment"
 
 
-def strength_label(master, var, style_bg=BG):
+COLOUR_OPTIONS = ("background", "foreground", "activebackground", "activeforeground", "highlightbackground",
+                  "highlightcolor", "insertbackground", "selectbackground", "selectforeground", "disabledforeground")
+
+
+def _recolour(widget, swap: dict) -> None:
+    """Swap the colours a widget and its children were drawn with, for widgets that set colours directly."""
+    options = widget.keys()
+    for opt in COLOUR_OPTIONS:
+        if opt in options:
+            new = swap.get(str(widget.cget(opt)).lower())
+            if new:
+                widget.configure({opt: new})
+    for child in widget.winfo_children():
+        _recolour(child, swap)
+
+
+def switch_palette(root: tk.Tk, name: str) -> None:
+    """Re-colour the open window and any open dialogs to the named palette, without rebuilding them."""
+    if name == PALETTE_NAME:
+        return
+    old = LIGHT if PALETTE_NAME == "light" else DARK
+    new = LIGHT if name == "light" else DARK
+    swap = {old[k].lower(): new[k] for k in old}
+    use_palette(name)
+    apply_style(root)
+    _recolour(root, swap)
+
+
+def strength_label(master, var, style_bg=None):
     """Label that tracks the strength of the password in var."""
-    lbl = tk.Label(master, text="", bg=style_bg, fg=MUTED, font=("Sans", 8))
+    lbl = tk.Label(master, text="", bg=style_bg or BG, fg=MUTED, font=("Sans", 8))
 
     def update(*_):
         pw = var.get()
@@ -372,6 +494,56 @@ class HistoryDialog(Dialog):
         self.destroy()
 
 
+class BackupsDialog(Dialog):
+    def __init__(self, app):
+        super().__init__(app, "Backups")
+        self.backups = pwvault.list_backups(app.vault.path)  # newest first
+        b = self.body
+        if not self.backups:
+            ttk.Label(b, text="No backups yet. A backup of the vault is kept each time it is saved (the last 10).",
+                      style="Muted.TLabel", wraplength=360).pack()
+        else:
+            self.tree = ttk.Treeview(b, columns=("when", "size"), show="headings",
+                                     height=min(10, len(self.backups)), selectmode="browse")
+            self.tree.heading("when", text="Saved")
+            self.tree.column("when", width=200, anchor="w")
+            self.tree.heading("size", text="Size")
+            self.tree.column("size", width=90, anchor="e")
+            for i, (when, path) in enumerate(self.backups):
+                self.tree.insert("", "end", iid=str(i), values=(
+                    when.astimezone().strftime("%Y-%m-%d %H:%M:%S"), f"{path.stat().st_size / 1024:.1f} KB"))
+            self.tree.pack(fill="both", expand=True)
+            self.tree.selection_set("0")
+            self.error = ttk.Label(b, style="Error.TLabel", wraplength=360)
+            self.error.pack(anchor="w", pady=(8, 0))
+        btns = ttk.Frame(b)
+        btns.pack(fill="x", pady=(10, 0))
+        ttk.Button(btns, text="Close", command=self.destroy).pack(side="right")
+        self.restore_btn = ttk.Button(btns, text="Restore this backup", style="Accent.TButton",
+                                      command=self.restore, state="normal" if self.backups else "disabled")
+        self.restore_btn.pack(side="right", padx=4)
+        self.show()
+
+    def restore(self):
+        sel = self.tree.selection()
+        if not sel:
+            return
+        when, path = self.backups[int(sel[0])]
+        if not messagebox.askyesno(
+                "Restore backup",
+                f"Replace the current vault with the backup from {when.astimezone():%Y-%m-%d %H:%M:%S}?\n\n"
+                "The current file is kept as a backup first.", parent=self):
+            return
+        try:
+            self.app.vault.restore(path)
+        except (VaultError, OSError) as err:
+            self.error.configure(text=str(err).capitalize() + ".")
+            return
+        # Locking drops the in-memory vault and asks for the password again, so the entries shown
+        # are the restored file's (the same reload the app does after a failed save).
+        self.app.lock(f"Restored the backup from {when.astimezone():%Y-%m-%d %H:%M:%S}. Unlock to continue.")
+
+
 class GeneratorDialog(Dialog):
     def __init__(self, app):
         super().__init__(app, "Password generator")
@@ -499,6 +671,10 @@ class App:
             self.frame.destroy()
         self.frame = frame
         frame.pack(fill="both", expand=True)
+
+    def style_tree(self):
+        # Treeview tags are not widgets, so they're re-coloured here rather than by _recolour.
+        self.tree.tag_configure("expired", foreground=DANGER)
 
     def status(self, msg):
         if hasattr(self, "status_lbl") and self.status_lbl.winfo_exists():
@@ -694,6 +870,7 @@ class App:
         se.focus_set()
         ttk.Label(bar, text="  search all groups", style="Muted.TLabel").pack(side="left")
         for text, cmd, style in [("🔒 Lock", self.lock, "TButton"),
+                                 (theme_label(read_theme_choice()), self.cycle_theme, "TButton"),
                                  ("Database ▾", self.database_menu, "TButton"),
                                  ("Generator", lambda: GeneratorDialog(self), "TButton"),
                                  ("+ Add", self.add_entry, "Accent.TButton")]:
@@ -701,6 +878,8 @@ class App:
             b.pack(side="right", padx=2)
             if text.startswith("Database"):
                 self.db_btn = b
+            elif text.startswith("Theme"):
+                self.theme_btn = b
 
         body = ttk.Frame(f)
         body.pack(fill="both", expand=True)
@@ -729,7 +908,7 @@ class App:
         for col, label, w in cols:
             self.tree.heading(col, text=label, command=lambda c=col: self.sort_by(c))
             self.tree.column(col, width=w, anchor="w")
-        self.tree.tag_configure("expired", foreground=DANGER)
+        self.style_tree()
         sb = ttk.Scrollbar(mid, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=sb.set)
         self.tree.pack(side="left", fill="both", expand=True)
@@ -756,6 +935,7 @@ class App:
         self.root.bind("<Control-n>", lambda e: self.add_entry())
         self.root.bind("<Control-f>", lambda e: se.focus_set())
         self.root.bind("<Control-l>", lambda e: self.lock())
+        self.root.bind("<Control-Shift-B>", lambda e: self.open_backups())
 
         self.sort_col = "title"
         self.current_group = self.vault.root
@@ -1069,12 +1249,27 @@ class App:
             self.show_group(self.vault.root, select=e)
             self.status(f"Restored '{e.title}' to {self.vault.root.name}.")
 
+    def cycle_theme(self):
+        current = read_theme_choice()
+        self.set_theme(THEME_CHOICES[(THEME_CHOICES.index(current) + 1) % len(THEME_CHOICES)])
+
+    def set_theme(self, choice: str):
+        try:
+            write_theme_choice(choice)
+        except OSError as err:
+            messagebox.showerror("Theme", f"Couldn't save the theme: {err}", parent=self.root)
+            return
+        self.theme_btn.configure(text=theme_label(choice))
+        switch_palette(self.root, theme_name(choice))
+        self.style_tree()
+        self.status(f"Theme set to {choice}.")
+
     # ---------------------------------------------------------- database menu
 
     def database_menu(self):
-        m = tk.Menu(self.root, tearoff=0, bg=PANEL, fg=FG, activebackground=ACCENT, activeforeground="#fff")
+        m = tk.Menu(self.root, tearoff=0, bg=PANEL, fg=FG, activebackground=ACCENT, activeforeground=ON_ACCENT)
         m.add_command(label="Import CSV…", command=self.import_csv)
-        exp = tk.Menu(m, tearoff=0, bg=PANEL, fg=FG, activebackground=ACCENT, activeforeground="#fff")
+        exp = tk.Menu(m, tearoff=0, bg=PANEL, fg=FG, activebackground=ACCENT, activeforeground=ON_ACCENT)
         for fmt in pwvault.EXPORT_FORMATS:
             exp.add_command(label=fmt.upper() + {"csv": "  (safe to open in a spreadsheet)",
                                                  "xml": "  (KeePass XML)"}.get(fmt, ""),
@@ -1084,6 +1279,7 @@ class App:
                                 command=lambda: self.export("csv", raw=True))
         m.add_cascade(label="Export", menu=exp)
         m.add_separator()
+        m.add_command(label="Backups…", command=self.open_backups)
         m.add_command(label="Empty recycle bin…", command=self.empty_bin)
         m.add_command(label="Change master key…", command=lambda: ChangeMasterDialog(self))
         m.add_separator()
@@ -1095,6 +1291,10 @@ class App:
             parent=self.root))
         b = self.db_btn
         m.tk_popup(b.winfo_rootx(), b.winfo_rooty() + b.winfo_height())
+
+    def open_backups(self):
+        if self.vault is not None:  # the shortcut also fires on the unlock screen, where there's no vault
+            BackupsDialog(self)
 
     def empty_bin(self):
         if not messagebox.askyesno("Empty recycle bin", "Permanently delete everything in the recycle bin?",

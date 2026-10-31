@@ -82,7 +82,12 @@ The GUI offers search across all groups, add/edit with a password generator, ent
 | Ctrl+N | New entry |
 | Ctrl+F | Focus search |
 | Ctrl+L | Lock the vault |
+| Ctrl+Shift+B | Open Backups (restore an earlier version of the vault) |
 | Delete | Move the selected entry to the recycle bin |
+
+The GUI's colours are light or dark. By default it follows the desktop setting (KDE's window colour, or GNOME's color-scheme) and uses dark if that can't be read. To override it, click the Theme button in the top bar, which cycles System, Light and Dark. The choice applies straight away, including to open dialogs, and is saved in `~/.config/pwvault/settings.ini`, not in the vault.
+
+Database > Backups lists the last versions of the vault, newest first. Restoring one asks first, keeps the current file as a backup, and locks the vault so you unlock to see the restored entries.
 
 ### Auto-lock
 

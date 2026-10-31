@@ -22,7 +22,7 @@ Phases: 2 of 5 complete (40%)
 |-------|------|-------|--------|-----------|
 | 1 | Safe saves & backups | 1/1 | ✅ Complete | 2026-10-30 |
 | 2 | TOTP codes | 1/1 | ✅ Complete | 2026-10-30 |
-| 3 | GUI polish | TBD | Not started | - |
+| 3 | GUI polish | 0/1 | Planning | - |
 | 4 | Security review & hardening | TBD | Not started | - |
 | 5 | Packaging & release | TBD | Not started | - |
 
@@ -65,9 +65,14 @@ Phases: 2 of 5 complete (40%)
 **Research:** Unlikely
 
 **Scope:**
-- Visual refresh (ttk theme, spacing, dark-mode aware)
-- Search/filter as you type; keyboard shortcuts
-- Restore-from-backup dialog
+- Light/dark palette that follows the desktop setting (chosen at startup)
+- Spacing and contrast tidy-up within both palettes
+- Restore-from-backup dialog (GUI)
+- Shortcut gaps (Ctrl+Shift+B for Backups)
+- Search as you type and Ctrl+F already exist; not re-planned
+
+**Plans:**
+- [ ] 03-01: Backups dialog, desktop light/dark palette, spacing and shortcut tidy-up
 
 ### Phase 4: Security review & hardening
 
@@ -92,4 +97,4 @@ Phases: 2 of 5 complete (40%)
 
 ---
 *Roadmap created: 2026-10-30*
-*Last updated: 2026-10-30 after Phase 2*
+*Last updated: 2026-10-30 after Phase 3 planning*
