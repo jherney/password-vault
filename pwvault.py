@@ -140,6 +140,33 @@ def remove_backups(path: Path, keep: int = 0) -> int:
     return removed
 
 
+REKEY_MARKER = ".rekey-pending"  # in the backup folder; not named like a backup, so listings skip it
+
+
+def _rekey_marker(path: Path) -> Path:
+    return backup_dir(path) / REKEY_MARKER
+
+
+def _write_rekey_marker(path: Path, blob: bytes) -> None:
+    """Record the digest of the file a re-key is about to write, before writing it."""
+    backup_dir(path).mkdir(parents=True, exist_ok=True, mode=0o700)
+    write_private(_rekey_marker(path), hashlib.sha256(blob).hexdigest().encode())
+
+
+def _finish_interrupted_rekey(path: Path, blob: bytes) -> None:
+    """A re-key that crashed after writing the new file, before purging the backups made with the
+    old key, is finished here. If the vault on disk is the file the marker recorded, the purge
+    runs; otherwise the write never happened, so only the marker goes."""
+    marker = _rekey_marker(path)
+    try:
+        recorded = marker.read_text().strip()
+    except FileNotFoundError:
+        return
+    if recorded == hashlib.sha256(blob).hexdigest():
+        remove_backups(path)
+    marker.unlink(missing_ok=True)
+
+
 def check_master_key(password: str, keyfile) -> None:
     """A vault needs a strong password, or a key file (with or without a password)."""
     if not keyfile and len(password) < MIN_MASTER_LEN:
@@ -260,6 +287,7 @@ class Vault:
         if keyfile and not Path(keyfile).is_file():
             raise VaultError(f"key file not found: {keyfile}")
         kp = load_kdbx(blob, password or None, str(keyfile) if keyfile else None)
+        _finish_interrupted_rekey(path, blob)
         return cls(path, kp, blob, kp.transformed_key)
 
     def restore(self, backup: Path) -> None:
@@ -279,6 +307,8 @@ class Vault:
         buf = io.BytesIO()
         self.kp.save(buf, transformed_key=self.transformed_key)
         blob = buf.getvalue()
+        if self.rekeyed:
+            _write_rekey_marker(self.path, blob)  # so a crash before the purge is finished on open
         self._write(blob)
         if self.transformed_key is None:
             # First save after create/rekey ran Argon2 with a fresh salt; learn the new key.
@@ -287,6 +317,7 @@ class Vault:
                 # The new file opens with the new key, so the backups, all made with the retired
                 # key (perhaps changed because it leaked), can go.
                 self.purged_backups = remove_backups(self.path)
+                _rekey_marker(self.path).unlink(missing_ok=True)
                 self.rekeyed = False
 
     def _write(self, blob: bytes) -> None:

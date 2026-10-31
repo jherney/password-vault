@@ -23,7 +23,7 @@ Phases: 3 of 5 complete (60%)
 | 1 | Safe saves & backups | 1/1 | ✅ Complete | 2026-10-30 |
 | 2 | TOTP codes | 1/1 | ✅ Complete | 2026-10-30 |
 | 3 | GUI polish | 1/1 | ✅ Complete | 2026-10-30 |
-| 4 | Security review & hardening | TBD | Not started | - |
+| 4 | Security review & hardening | 1/3 | In progress | - |
 | 5 | Packaging & release | TBD | Not started | - |
 
 ## Phase Details
@@ -83,6 +83,11 @@ Phases: 3 of 5 complete (60%)
 **Scope:**
 - Security audit (`/cso`) and fixes
 - QA pass (`/qa`) on CLI and GUI with regression tests
+
+**Plans:**
+- [x] 04-01: Security audit (findings, threat model, data classification); re-key purge made crash-safe (F-01); key file ignored by git
+- [ ] 04-02: Fixes for any further findings (none needed so far; decide before planning)
+- [ ] 04-03: QA pass on CLI and GUI with regression tests (to be planned)
 
 ### Phase 5: Packaging & release
 

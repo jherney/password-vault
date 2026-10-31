@@ -106,6 +106,42 @@ class BackupOnSaveTests(Base):
         self.assertEqual(len(self.backups()), 1)
         pwvault.PyKeePass(str(self.backups()[0]), NEW_PW)
 
+    def test_crash_after_rekey_write_is_finished_on_next_open(self):
+        v = self.new_vault()
+        v.add_entry(v.root, "GitLab", "me", "pw2")
+        v.save()
+        real_remove = pwvault.remove_backups
+
+        def crash_on_purge(path, keep=0):
+            if keep == 0:  # the re-key purge; the routine prune passes keep=10
+                raise RuntimeError("simulated crash")
+            return real_remove(path, keep)
+
+        v.rekey(NEW_PW)
+        with patch.object(pwvault, "remove_backups", crash_on_purge), self.assertRaises(RuntimeError):
+            v.save()
+        self.assertTrue(self.backups())  # old-key backups survive the crash...
+        self.assertTrue(pwvault._rekey_marker(self.path).exists())
+        self.reopen(NEW_PW)              # ...and the next open finishes the purge
+        self.assertEqual(self.backups(), [])
+        self.assertFalse(pwvault._rekey_marker(self.path).exists())
+
+    def test_crash_before_rekey_write_keeps_backups(self):
+        v = self.new_vault()
+        v.add_entry(v.root, "GitLab", "me", "pw2")
+        v.save()
+        before = set(self.backups())
+
+        def crash_before_write(self_, blob):
+            raise RuntimeError("simulated crash")
+
+        v.rekey(NEW_PW)
+        with patch.object(pwvault.Vault, "_write", crash_before_write), self.assertRaises(RuntimeError):
+            v.save()
+        self.reopen(PW)                  # the vault still has the old key
+        self.assertEqual(set(self.backups()), before)  # nothing purged: the new file never landed
+        self.assertFalse(pwvault._rekey_marker(self.path).exists())
+
     def test_failed_rekey_save_keeps_backups(self):
         v = self.new_vault()
         v.add_entry(v.root, "GitLab", "me", "pw2")
