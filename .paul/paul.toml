@@ -15,20 +15,18 @@ status = "in_progress"
 phases = 5
 
 [phase]
-number = 3
-name = "GUI polish"
-status = "planning"
+number = 4
+name = "Security review & hardening"
+status = "not_started"
 plans_completed = 0
 
 [loop]
-position = "PLAN"
-plan = "03-01"
-plan_path = "phases/03-gui-polish/03-01-PLAN.md"
+position = "IDLE"
 
 [satellite]
 groom = true
 
 [stats]
-total_plans = 2
+total_plans = 3
 total_phases = 5
-last_activity = "2026-10-30T20:20:00-03:00"
+last_activity = "2026-10-30T22:00:53-03:00"

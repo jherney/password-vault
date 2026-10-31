@@ -14,7 +14,7 @@ Take pwvault from 1.2.0 to a hardened, distributable release: fix remaining edge
 
 **v1.3 Hardening, TOTP, Backups & Release** (v1.3.0)
 Status: In progress
-Phases: 2 of 5 complete (40%)
+Phases: 3 of 5 complete (60%)
 
 ## Phases
 
@@ -22,7 +22,7 @@ Phases: 2 of 5 complete (40%)
 |-------|------|-------|--------|-----------|
 | 1 | Safe saves & backups | 1/1 | ✅ Complete | 2026-10-30 |
 | 2 | TOTP codes | 1/1 | ✅ Complete | 2026-10-30 |
-| 3 | GUI polish | 0/1 | Planning | - |
+| 3 | GUI polish | 1/1 | ✅ Complete | 2026-10-30 |
 | 4 | Security review & hardening | TBD | Not started | - |
 | 5 | Packaging & release | TBD | Not started | - |
 
@@ -58,7 +58,7 @@ Phases: 2 of 5 complete (40%)
 **Plans:**
 - [x] 02-01: TOTP core (RFC 6238, KeePassXC formats), `pwvault totp` CLI, GUI live code
 
-### Phase 3: GUI polish
+### Phase 3: GUI polish ✅
 
 **Goal:** A cleaner, faster GUI: modernized look, search, keyboard shortcuts, backup restore screen
 **Depends on:** Phases 1–2 (GUI surfaces backups and TOTP)
@@ -72,7 +72,7 @@ Phases: 2 of 5 complete (40%)
 - Search as you type and Ctrl+F already exist; not re-planned
 
 **Plans:**
-- [ ] 03-01: Backups dialog, desktop light/dark palette, spacing and shortcut tidy-up
+- [x] 03-01: Backups dialog, desktop light/dark palette with a live Theme button, spacing and shortcut tidy-up
 
 ### Phase 4: Security review & hardening
 
@@ -97,4 +97,4 @@ Phases: 2 of 5 complete (40%)
 
 ---
 *Roadmap created: 2026-10-30*
-*Last updated: 2026-10-30 after Phase 3 planning*
+*Last updated: 2026-10-30 after Phase 3 unify*

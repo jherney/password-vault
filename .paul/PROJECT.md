@@ -41,14 +41,19 @@ I can keep all my passwords in one encrypted local vault that I control, use it 
 - [x] Password generator, self-clearing clipboard, auto-lock — 1.2.0
 - ✓ Automatic versioned backups: previous vault kept before every save (last 10), `pwvault backup list|restore`, old-key backups purged after re-key — Phase 1
 - ✓ Failed or interrupted saves never corrupt the vault (fault-injection tested) — Phase 1
+- ✓ TOTP/2FA codes via KeePassXC's `otp` attribute (CLI and GUI, RFC 6238 generator) — Phase 2
+- ✓ Database > Backups dialog (Ctrl+Shift+B): list backups newest first, restore after confirmation — Phase 3
+- ✓ Light and dark palettes following the desktop setting, with a Theme button that applies live — Phase 3
+- ✓ WCAG contrast checked for both palettes; consistent label spacing in dialogs — Phase 3
 
 ### Active (In Progress)
 
-- ✓ TOTP/2FA codes via KeePassXC's `otp` attribute (CLI and GUI, RFC 6238 generator) — Phase 2
+- None. Phase 4 (security review and hardening) is next.
 
 ### Planned (Next)
 
-- To be defined during /paul:plan
+- Phase 4: `/cso` review of v1.3 changes and QA-driven fixes (to be defined during /paul:plan)
+- Phase 5: PyPI release and `.desktop` launcher
 
 ### Out of Scope
 
@@ -82,12 +87,14 @@ I can keep all my passwords in one encrypted local vault that I control, use it 
 | Implement TOTP with stdlib | Avoid new dependencies in a security tool | 2026-10-30 | Active |
 | Delete old-key backups after a verified re-key | A leaked old password mustn't open leftover backups | 2026-10-30 | Active |
 | Every vault write goes through `Vault._write()` | One place for lock, conflict check, backup and atomic write | 2026-10-30 | Active |
+| Theme follows the desktop by default; in-app override saved outside the vault and applied live | Keeps vault format unchanged; the user asked for a control, then for it to apply immediately | 2026-10-30 | Active |
+| Restore via `Vault.restore()` only, after confirmation | One verified path; GUI never copies backup files | 2026-10-30 | Active |
 
 ## Success Metrics
 
 | Metric | Target | Current | Status |
 |--------|--------|---------|--------|
-| CI test suite | All existing + new tests pass | 126 passing | On track |
+| CI test suite | All existing + new tests pass | 141 passing (last full run) | On track |
 | TOTP interoperability | Codes match KeePassXC for same entry | RFC vectors + phone check pass; real KeePassXC not run here | Met (partial evidence) |
 | Save safety | Failed/interrupted save never corrupts vault; last N backups restorable | Met (Phase 1) | ✓ |
 | Distribution | `pip install pwvault` from PyPI; GUI in desktop app menu | - | Not started |
@@ -113,4 +120,4 @@ I can keep all my passwords in one encrypted local vault that I control, use it 
 
 ---
 *Created: 2026-10-30*
-*Last updated: 2026-10-30 after Phase 2*
+*Last updated: 2026-10-30 after Phase 3*

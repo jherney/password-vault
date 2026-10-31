@@ -290,23 +290,23 @@ class EntryDialog(Dialog):
             field.grid(row=row, column=1, columnspan=2, sticky="ew")
             if key == "title":
                 self.title_field = field
-        ttk.Label(b, text="Password").grid(row=2, column=0, sticky="w", pady=4)
+        ttk.Label(b, text="Password").grid(row=2, column=0, sticky="w", pady=4, padx=(0, 10))
         self.pw = PasswordField(b, self.vars["password"], width=32)
         self.pw.grid(row=2, column=1, sticky="ew")
         ttk.Button(b, text="Generate", command=self.generate).grid(row=2, column=2, padx=(4, 0))
         strength_label(b, self.vars["password"]).grid(row=3, column=1, sticky="w")
-        ttk.Label(b, text="URL").grid(row=4, column=0, sticky="w", pady=4)
+        ttk.Label(b, text="URL").grid(row=4, column=0, sticky="w", pady=4, padx=(0, 10))
         ttk.Entry(b, textvariable=self.vars["url"], width=44).grid(row=4, column=1, columnspan=2, sticky="ew")
 
         # Only a changed TOTP field is saved, so editing other fields leaves legacy TOTP storage be.
         self.otp_initial = self.initial_otp(entry)
         self.otp = tk.StringVar(value=self.otp_initial)
-        ttk.Label(b, text="TOTP").grid(row=5, column=0, sticky="w", pady=4)
+        ttk.Label(b, text="TOTP").grid(row=5, column=0, sticky="w", pady=4, padx=(0, 10))
         PasswordField(b, self.otp, width=32).grid(row=5, column=1, columnspan=2, sticky="ew")
         ttk.Label(b, text="2FA secret or otpauth:// URI, optional", style="Muted.TLabel").grid(
             row=6, column=1, sticky="w")
 
-        ttk.Label(b, text="Group").grid(row=7, column=0, sticky="w", pady=4)
+        ttk.Label(b, text="Group").grid(row=7, column=0, sticky="w", pady=4, padx=(0, 10))
         self.groups = v.groups()
         self.group_names = [v.group_path(g) for g in self.groups]
         current = entry.group if entry and not v.in_recycle_bin(entry) else (group or v.root)
@@ -314,7 +314,7 @@ class EntryDialog(Dialog):
         ttk.Combobox(b, textvariable=self.group, values=self.group_names, state="readonly").grid(
             row=7, column=1, columnspan=2, sticky="ew")
 
-        ttk.Label(b, text="Expires").grid(row=8, column=0, sticky="w", pady=4)
+        ttk.Label(b, text="Expires").grid(row=8, column=0, sticky="w", pady=4, padx=(0, 10))
         exp = ttk.Frame(b)
         exp.grid(row=8, column=1, columnspan=2, sticky="w")
         has_expiry = bool(entry and entry.expires)
@@ -326,7 +326,7 @@ class EntryDialog(Dialog):
         ttk.Label(exp, text="  YYYY-MM-DD", style="Muted.TLabel").pack(side="left")
         self.toggle_expiry()
 
-        ttk.Label(b, text="Notes").grid(row=9, column=0, sticky="nw", pady=4)
+        ttk.Label(b, text="Notes").grid(row=9, column=0, sticky="nw", pady=4, padx=(0, 10))
         self.notes = tk.Text(b, width=44, height=4, bg=PANEL, fg=FG, insertbackground=FG,
                              relief="flat", wrap="word", font=("Sans", 10))
         self.notes.insert("1.0", (entry.notes or "") if entry else "")
@@ -335,7 +335,7 @@ class EntryDialog(Dialog):
         # Attachment changes are staged here and applied on Save.
         self.attachments = list(entry.attachments) if entry else []
         self.to_add, self.to_remove = [], []
-        ttk.Label(b, text="Attachments").grid(row=10, column=0, sticky="nw", pady=4)
+        ttk.Label(b, text="Attachments").grid(row=10, column=0, sticky="nw", pady=4, padx=(0, 10))
         att = ttk.Frame(b)
         att.grid(row=10, column=1, columnspan=2, sticky="ew", pady=4)
         self.att_list = tk.Listbox(att, height=3, bg=PANEL, fg=FG, relief="flat", highlightthickness=0,
@@ -594,7 +594,7 @@ class ChangeMasterDialog(Dialog):
             ttk.Label(b, text=label).grid(row=row, column=0, sticky="w", pady=4, padx=(0, 10))
             PasswordField(b, var).grid(row=row, column=1, sticky="ew")
         strength_label(b, self.new).grid(row=3, column=1, sticky="w")
-        ttk.Label(b, text="New key file").grid(row=4, column=0, sticky="w", pady=4)
+        ttk.Label(b, text="New key file").grid(row=4, column=0, sticky="w", pady=4, padx=(0, 10))
         self.keyfile = KeyFileField(b, app, allow_new=True)
         self.keyfile.grid(row=4, column=1, sticky="ew")
         if app.vault.kp.keyfile:
