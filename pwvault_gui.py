@@ -743,9 +743,15 @@ class App:
         self.show_unlock(msg)
 
     def quit(self):
+        # Pending timers must be cancelled, not just ignored: one that fires after destroy would hit
+        # a deleted Tcl command.
         if self.clip_job:
+            self.root.after_cancel(self.clip_job)
             self.clear_clipboard()
-        self.stop_totp()  # a tick after destroy would hit a deleted Tcl command
+        if self.lock_job:
+            self.root.after_cancel(self.lock_job)
+            self.lock_job = None
+        self.stop_totp()
         self.root.destroy()
 
     def save(self) -> bool:

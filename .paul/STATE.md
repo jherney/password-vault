@@ -11,22 +11,22 @@ about: "pwvault"
 See: .paul/PROJECT.md (updated 2026-10-30)
 
 **Core value:** I can keep all my passwords in one encrypted local vault that I control, use it from the terminal or a GUI, and still open it in KeePass-compatible apps.
-**Current focus:** v1.3 — Phase 4 Security review & hardening (plan 04-01 complete; 04-02 and 04-03 remain)
+**Current focus:** v1.3 — Phase 4 Security review & hardening (plan 04-01 and 04-03 complete; 04-02 not needed)
 
 ## Current Position
 
 Milestone: v1.3 Hardening, TOTP, Backups & Release
 Phase: 4 of 5 (Security review & hardening) — In progress
-Plan: 04-01 complete (SUMMARY written)
-Status: Ready for next decision: whether a fix plan (04-02) is needed, then QA (04-03)
-Last activity: 2026-10-30 — Unified 04-01: F-01 fixed; findings, threat model and data classification written; full suite 151 OK
+Plan: 04-03 complete (QA pass, 4 defects fixed incl. trash restore to original group); 04-02 not needed
+Status: 04-03 applied; next is Phase 5 planning
+Last activity: 2026-10-30 — Unified 04-01: F-01 fixed; findings, threat model and data classification written; full suite 156 OK after 04-03
 
 Progress:
 - Milestone: [██████░░░░] 60%
 - Phase 1: [██████████] 100% ✓
 - Phase 2: [██████████] 100% ✓
 - Phase 3: [██████████] 100% ✓
-- Phase 4: [███░░░░░░░] 33% (plan 04-01 of 3 complete)
+- Phase 4: [██████░░░░] 67% (plans 04-01 and 04-03 complete; 04-02 not needed)
 
 ## Loop Position
 
@@ -64,7 +64,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 - Phase 1: ~~backups not opened in real KeePassXC~~ resolved 2026-10-30: a backup opens in keepassxc-cli 2.8.0 with correct TOTP.
 - Phase 1: after a re-key, only the purge keeps old-key backups from lingering; revisit in Phase 4's security review.
-- Phase 4 (04-01): the stray `pwvault.keyx` writer is still unidentified; the ignore rule keeps it out of git.
+- Resolved 04-03 (CLI-03 trash restore fixed in a follow-up): the stray `pwvault.keyx` was a test key file the user created by hand; the ignore rule stays.
 
 ### Git State
 
@@ -76,8 +76,8 @@ Uncommitted: `.gstack/` and `pwvault.keyx` (both intentionally not committed)
 ## Session Continuity
 
 Last session: 2026-10-30
-Stopped at: Plan 04-01 complete
-Next action: /paul:plan for the next Phase 4 plan (QA pass, 04-03); no fix plan is needed unless new findings come up
+Stopped at: Plan 04-03 complete
+Next action: Phase 4 closed; plan Phase 5 with /paul:plan
 Resume file: .paul/phases/04-security-review/04-01-SUMMARY.md
 
 ---

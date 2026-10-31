@@ -326,9 +326,10 @@ class ImportExportTests(Base):
         restored = {(r["title"], r["password"], r["notes"]) for r in pwvault.read_csv_export(out)}
         self.assertEqual(restored, {(t, pw, "Tab start") for t, pw in tricky.items()})  # notes are stripped
 
-        pwvault.export(v, out, "csv", raw=True)
-        self.assertIn("-starts-with-dash", out.read_text())
-        self.assertNotIn("'-starts-with-dash", out.read_text())
+        raw = self.tmp / "raw.csv"  # export refuses to overwrite, so the raw copy gets its own file
+        pwvault.export(v, raw, "csv", raw=True)
+        self.assertIn("-starts-with-dash", raw.read_text())
+        self.assertNotIn("'-starts-with-dash", raw.read_text())
 
     def test_foreign_csv_keeps_leading_quotes(self):
         # Only pwvault's own (escaped) export is unescaped on import.

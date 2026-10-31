@@ -39,6 +39,7 @@ import sys
 import tempfile
 import time
 import urllib.parse
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -500,10 +501,40 @@ class Vault:
         if self.in_recycle_bin(entry):
             self.kp.delete_entry(entry)
         else:
+            self._set_previous_group(entry, entry.group)
             self.kp.trash_entry(entry)
 
     def restore_entry(self, entry, group=None) -> None:
-        self.kp.move_entry(entry, group or self.root)
+        """Restore to the given group, else to the group it was trashed from, else to the root."""
+        target = group or self._previous_group(entry) or self.root
+        self.kp.move_entry(entry, target)
+        self._clear_previous_group(entry)
+
+    # The group an entry was trashed from is stored in the standard PreviousParentGroup element
+    # (base64 UUID of the group), the same element KeePassXC writes, so both apps restore alike.
+    def _set_previous_group(self, entry, group) -> None:
+        el = entry._element.find("PreviousParentGroup")
+        if el is None:
+            el = etree.SubElement(entry._element, "PreviousParentGroup")
+        el.text = base64.b64encode(group.uuid.bytes).decode()
+
+    def _previous_group(self, entry):
+        el = entry._element.find("PreviousParentGroup")
+        if el is None or not el.text:
+            return None
+        try:
+            group_uuid = uuid.UUID(bytes=base64.b64decode(el.text, validate=True))
+        except (ValueError, TypeError):
+            return None  # a damaged element means "unknown", so the entry goes to the root
+        group = self.kp.find_groups(uuid=group_uuid, first=True)
+        if group is None or self.in_recycle_bin(group):
+            return None
+        return group
+
+    def _clear_previous_group(self, entry) -> None:
+        el = entry._element.find("PreviousParentGroup")
+        if el is not None:
+            entry._element.remove(el)
 
     def empty_recycle_bin(self) -> int:
         bin_ = self.recycle_bin
@@ -894,6 +925,8 @@ def export(vault: Vault, path: Path, fmt: str, raw: bool = False) -> int:
     if path.exists() and any(Path(p).exists() and os.path.samefile(path, p)
                              for p in (vault.path, vault.kp.keyfile) if p):
         raise VaultError(f"{path} is the vault or its key file; export to a different file")
+    if path.exists():  # an export is a copy of the vault; never replace a file the user may still need
+        raise VaultError(f"{path} already exists; choose another name")
     entries =[e for e in vault.kp.entries if not vault.in_recycle_bin(e)]
     rows = [(vault.group_path(e.group), e.title or "", e.username or "", e.password or "",
              e.url or "", e.notes or "", fmt_time(e.mtime), fmt_time(e.ctime)) for e in entries]
@@ -1127,6 +1160,8 @@ def cmd_add(args):
     group = vault.get_group(args.group, create=True) if args.group else vault.root
     title = input("Title (e.g. GitHub): ").strip()
     url = input("URL: ").strip()
+    if not (title or url):
+        raise VaultError("an entry needs a title or a URL")
     username = input("Username: ").strip()
     if args.generate:
         password = generate_password(args.length)
