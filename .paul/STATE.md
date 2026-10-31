@@ -58,7 +58,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 - Phase 2: real KeePassXC not run on this machine; interop covered by RFC vectors, sample entries, and phone check
 - Phase 3: Backups restore locks the vault rather than reloading in place (approved as-is)
 - Phase 3: a stray untracked `pwvault.keyx` (32 bytes) appeared in the repo root during a test run at 21:51; source not identified (not reproduced in a later full run); `*.keyx` is now git-ignored
-- Phase 4 (04-01): F-11 CI actions pinned by tag, not SHA; F-12 no lock file for dependencies. Both deferred to Phase 5 before any publish workflow
+- Phase 4 (04-01): F-15 no lock file for dependencies; deferred to Phase 5 before any publish workflow. CI pins (F-11) and dependency minimums (F-12, F-14) fixed after the second CSO run
 
 ### Blockers/Concerns
 

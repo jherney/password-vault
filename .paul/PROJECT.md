@@ -68,7 +68,7 @@ I can keep all my passwords in one encrypted local vault that I control, use it 
 - Vaults must stay openable in KeePassXC; no proprietary fields (TOTP uses the standard `otp` attribute)
 - No new runtime dependencies unless essential (TOTP via stdlib `hmac`/`base64`)
 - Linux first; CI covers Python 3.10–3.14
-- `lxml` >= 5.0 required (older versions resolve external XML entities)
+- `lxml` >= 6.1 required (older versions resolve external XML entities; GHSA-vfmq-68hx-4jfw fixed in 6.1.0)
 
 ### Business Constraints
 
@@ -106,7 +106,7 @@ I can keep all my passwords in one encrypted local vault that I control, use it 
 |-------|------------|-------|
 | Language | Python 3.10+ | Single-module CLI (`pwvault.py`) and GUI (`pwvault_gui.py`) |
 | Vault format | KDBX 4 via `pykeepass` 4.2.0 | Pinned version |
-| XML | `lxml` >= 5.0 | Security requirement |
+| XML | `lxml` >= 6.1 | Security requirement |
 | GUI | Tkinter | `python3-tk` on Fedora/Debian |
 | Packaging | setuptools (`pyproject.toml`) | Entry points `pwvault`, `pwvault-gui` |
 | CI | GitHub Actions (`.github/workflows/tests.yml`) | |

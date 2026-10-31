@@ -20,7 +20,7 @@ A small, local password manager. Your vault is a standard KeePass (`.kdbx`) file
 ## Requirements
 
 - Linux or another POSIX system, Python 3.10 or newer
-- [`pykeepass`](https://pypi.org/project/pykeepass/) and `lxml` 5.0 or newer (see `requirements.txt`)
+- [`pykeepass`](https://pypi.org/project/pykeepass/) and `lxml` 6.1 or newer (see `requirements.txt`)
 - For the legacy `.pwv` migration only: `cryptography`
 - Optional clipboard tool: `wl-clipboard` (Wayland) or `xclip` / `xsel` (X11)
 - The GUI needs Tkinter (`python3-tk` on Fedora/Debian)
@@ -126,7 +126,7 @@ The secret is stored the way KeePassXC stores it: as an `otpauth://` link in the
 - The vault is written atomically with file mode `0600`. If the vault path is a symlink (for example into a synced folder), the file it points to is updated and the link is kept.
 - Saves hold a file lock and refuse to overwrite changes another program made since you unlocked the vault. Nothing is lost silently; unlock again and redo the change.
 - Key-derivation parameters are checked before any expensive work runs, so a hostile vault file can't force huge memory or time costs. Argon2 is limited to 1 GiB, 256 lanes and 32 GiB × passes in total; AES-KDF to 60 million rounds. That is about a minute of work at most, and far above KeePassXC's defaults.
-- Vaults are only opened with `lxml` 5.0 or newer. Older `lxml` expands external XML entities, which a crafted vault could use to copy a local file into itself on the next save.
+- Vaults are only opened with `lxml` 6.1 or newer. Older `lxml` expands external XML entities, which a crafted vault could use to copy a local file into itself on the next save.
 - Attachment data is removed from the file once no entry or history version uses it.
 - Exports and CSV imports are plaintext. Delete them when you're done. `import --shred` overwrites the file before deleting it (it refuses symlinks, so it can't overwrite some other file), but on SSDs and copy-on-write filesystems (such as Fedora's default btrfs) old copies can survive. Full-disk encryption is what protects that data.
 - CSV exports are safe to open in a spreadsheet app: a value starting with `=`, `+`, `-` or `@` gets a leading `'`, so a hostile entry can't run as a formula (for example, one that sends every password to a website). pwvault's own import removes the prefix again. To move to another password manager, use `export csv --raw` (or *CSV (raw)* in the GUI), which keeps values exact and shouldn't be opened in a spreadsheet.

@@ -65,8 +65,9 @@ MAX_KDF_WORK = 32 << 30  # Argon2 memory x passes, e.g. 64 MiB x 512 or 1 GiB x 
 MAX_KDF_PARALLELISM = 256  # Argon2 lanes
 MAX_KDF_ROUNDS = 60_000_000  # AES-KDF rounds
 # lxml < 5 resolves external entities by default, so a crafted vault could pull a local file
-# into its XML (and into the next save). pykeepass doesn't pin lxml, so check here.
-MIN_LXML = (5, 0)
+# into its XML (and into the next save). lxml < 6.1 has an advisory (GHSA-vfmq-68hx-4jfw) for the
+# default iterparse() and ETCompatXMLParser() configurations. pykeepass doesn't pin lxml, so check here.
+MIN_LXML = (6, 1)
 KDBX_SIGNATURE = bytes.fromhex("03d9a29a67fb4bb5")
 KEYFILE_LEN = 32  # KeePass and KeePassXC use a 32-byte key file as the raw key
 HISTORY_MAX = 10  # versions kept per entry, KeePass's default

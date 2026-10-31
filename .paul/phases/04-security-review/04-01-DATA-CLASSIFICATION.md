@@ -47,7 +47,7 @@
 - F-02, F-03: explicit commands print secrets or codes. Accepted.
 - F-06: clipboard handling. Accepted.
 - F-09: a key file could be saved into a git folder. `*.keyx` is now ignored.
-- F-11, F-12: CI and dependency pinning. Deferred to Phase 5.
+- F-11 to F-14: CI pinning and dependency minimums. Fixed. F-15 (no lock file) deferred to Phase 5.
 
 ## Retention summary
 

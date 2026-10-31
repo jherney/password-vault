@@ -89,8 +89,8 @@ The threat model assumes malware running as the same user is out of scope, as th
 
 | Threat | Analysis | Mitigation | Residual / finding |
 |--------|----------|------------|--------------------|
-| **T**ampering: malicious dependency update | No lock file; transitive versions float. | `pykeepass` pinned; `lxml` ≥ 5.0. | **F-12**: deferred to Phase 5 (hash-pinned requirements). |
-| **T**ampering: compromised CI action | Actions pinned by tag, not SHA. | Read-only token; no secrets. | **F-11**: deferred to Phase 5. |
+| **T**ampering: malicious dependency update | No lock file; transitive versions float. `lxml` and `cryptography` minimums were below advisory fixes. | `pykeepass` pinned; `lxml` ≥ 6.1; `cryptography` ≥ 46.0.5. | **F-12**, **F-14**: fixed. **F-15** (no lock file): deferred to Phase 5. |
+| **T**ampering: compromised CI action | Actions were pinned by tag, not SHA. | Pinned to commit SHAs; read-only token; no secrets; no credentials persisted. | **F-11**, **F-13**: fixed. |
 | **E**levation of privilege in CI | `contents: read`; no publish step. | Least privilege. | None yet. Re-assess when Phase 5 adds publishing. |
 
 ## Out of scope
@@ -101,5 +101,5 @@ The threat model assumes malware running as the same user is out of scope, as th
 
 ## Open items carried to Phase 4 plans 02 and 03
 
-- Phase 5: pin CI actions to commit SHAs and add hash-pinned dependencies before any publish workflow (F-11, F-12).
+- Phase 5: add hash-pinned dependencies before any publish workflow (F-15). CI pinning (F-11) is already done.
 - The lock-file and backup-folder permissions were checked by reading code, not by a runtime test.

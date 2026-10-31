@@ -11,11 +11,11 @@
 |----------|-------|-------|------|
 | critical | 0 | 0 | 0 |
 | high | 0 | 0 | 0 |
-| medium | 0 | 0 | 0 |
-| low | 4 | 1 | 3 (accepted, with reasons) |
-| info | 6 | 0 | 6 (accepted) |
+| medium | 2 (F-11, F-12) | 2 | 0 |
+| low | 4 (F-01, F-03, F-13, F-14) | 3 | 1 (F-03, accepted: short-lived code shown to the user who set it) |
+| info | 8 | 0 | 8 (accepted, or F-15 deferred to Phase 5) |
 
-No critical, high or medium findings. Every item in the audit scope has been reviewed, except that `normalize_totp` and the legacy TOTP field handling were only partly read (see Coverage gaps).
+No critical or high findings. Every item in the audit scope has been reviewed, and `normalize_totp` and the legacy TOTP field handling were read in full after the first run. Gaps still open are listed at the end.
 
 ## Findings
 
@@ -31,8 +31,11 @@ No critical, high or medium findings. Every item in the audit scope has been rev
 | F-08 | info | `pwvault.py` `cmd_backup`, line 1166 | The CLI restore asks for the master password, takes the path from `list_backups` (not user input), and calls `Vault.restore`, which verifies the key first. | accepted: no issue |
 | F-09 | info | `pwvault_gui.py` `KeyFileField.new`, line 191 | The save dialog suggests `pwvault.keyx` in the current directory. Generation uses `O_EXCL` and mode `0600`. A user who saves into a git repo could commit the file. | accepted: `*.keyx` is now in `.gitignore` |
 | F-10 | info | `pwvault_gui.py` `EntryDialog` TOTP field and `PasswordField` (line 279 onward) | The TOTP secret is shown masked by default, with a Show toggle. | accepted: no issue |
-| F-11 | low | `.github/workflows/tests.yml` | Actions are pinned by tag (`@v4`, `@v5`), not by commit SHA. The workflow has `contents: read` and no secrets. | accepted until Phase 5: pin to SHAs before the publish workflow is added |
-| F-12 | low | `requirements.txt`, `pyproject.toml` | `pykeepass` is pinned; `lxml` and `cryptography` have minimum versions. There is no lock file, so transitive dependencies float. | accepted until Phase 5: add hash-pinned requirements before publishing to PyPI |
+| F-11 | medium | `.github/workflows/tests.yml` lines 19–20 | zizmor (`unpinned-uses`): actions were pinned by tag (`@v4`, `@v5`), not by commit. The workflow has `contents: read` and no secrets. | **fixed**: pinned to `actions/checkout` `11d5960a…` and `actions/setup-python` `a26af69b…`, with the tags in comments. |
+| F-12 | medium | `requirements.txt` line 2, `pyproject.toml` | The lxml minimum (5.0) is below 6.1.0, the release that fixes GHSA-vfmq-68hx-4jfw (XXE through default `iterparse()` and `ETCompatXMLParser()`). pykeepass parses vault XML with `etree.XMLParser`/`etree.parse`, so reachability is not shown. | **fixed**: lower bound and `MIN_LXML` raised to 6.1; README and project docs updated. Covered by `test_old_lxml_is_refused`. |
+| F-13 | low | `.github/workflows/tests.yml` line 19 | zizmor (`artipacked`): checkout left the token in the git config for later steps. | **fixed**: `persist-credentials: false`. |
+| F-14 | low | `requirements.txt` line 3, `pyproject.toml` legacy extra | The cryptography minimum (42) is below 46.0.5, the release that fixes GHSA-r6ph-v2qm-q3c2 (SECT subgroup validation). Used only for `migrate`. | **fixed**: lower bound raised to 46.0.5. |
+| F-15 | info | repository | No lock file; transitive dependencies float. | accepted until Phase 5: add hash-pinned requirements before publishing to PyPI |
 
 ## Audit scope (one row per item in the plan)
 
@@ -57,8 +60,25 @@ No critical, high or medium findings. Every item in the audit scope has been rev
 
 Also reviewed: the clipboard helper (F-06), the plaintext export and CSV shred paths (documented in the README and accepted), the CI workflow (F-11), and the dependency files (F-12).
 
+## Second CSO run (`1793410119535-26ad190c2bd2ed36`, comprehensive profile, 1800 s)
+
+Scope: `pwvault.py`, `pwvault_gui.py`, `tests`, `requirements.txt`, `pyproject.toml`, `.github`, `.claude`, `.gitignore`. Findings submitted to the helper: 4 (F-11 to F-14). Run finished partial.
+
+| Scanner | Version | Outcome |
+|---------|---------|---------|
+| gitleaks | 8.30.1 | complete, 0 candidates on the current tree (history not scanned) |
+| OSV | 2.6.0 | complete, 16 candidates: cryptography 42 and lxml 5.0 minimums |
+| zizmor | 1.30.1 | complete, 3 candidates: unpinned-uses (×2), artipacked |
+
+Comprehensive runtime checks were not run: the Python application-preparation prerequisite is missing because `requirements.txt` has no hashes. The run stayed static.
+
+Note on the run: `resume` refuses a finished audit, so this was a new run. The first run's findings were not submitted to the helper; the second run's were.
+
 ## Coverage gaps still open
 
-- The threat model (STRIDE, phase 10) and the data-classification pass (phase 11) were not written up as separate artifacts. The findings above cover the same ground for the reviewed code, but a formal pass is still missing.
-- No runtime or scanner execution (the run was static only, and the helper's scanners were not invoked).
-- `normalize_totp` and the legacy TOTP field handling were not read line by line in this phase.
+- **Skill supply chain (`.claude/skills/run-password-vault`)**: not assessed. The helper treats agent configuration as excluded, so `SKILL.md` and `driver.sh` were not read through the helper.
+- **Infrastructure**: not assessed. No infrastructure was inspected in either run.
+- **Secrets history**: gitleaks scanned the current tree only.
+- **Reachability**: unknown for every OSV candidate; the advisory fixes are applied as a precaution, not because reachability was shown.
+- **STRIDE and data classification**: written as documents (`04-01-THREAT-MODEL.md`, `04-01-DATA-CLASSIFICATION.md`), not checked by a runtime test.
+- The fixes for F-11 to F-14 were made after the second run's snapshot was taken, so the scanners have not been run against the fixed tree.

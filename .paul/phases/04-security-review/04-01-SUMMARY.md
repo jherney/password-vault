@@ -100,7 +100,8 @@ Test results:
 | Marker holds the digest of the new file | Lets the next open tell "write landed" from "write never happened" without trusting the timing | Old-key backups are purged even after a crash; a crash before the write keeps them |
 | F-01 fixed inside this plan | The user chose this at the checkpoint, though the plan said audit only | Plan 04-02 now covers only what the user asks for later |
 | F-07 closed as false positive | Masked lines show RFC test-vector timestamps and a clipboard helper key, not personal data | No change to test data |
-| F-11, F-12 deferred to Phase 5 | No publish workflow yet; pinning matters once publishing is added | Recorded in the findings and threat model |
+| F-11 to F-14 fixed after a second CSO run: CI actions pinned to SHAs, credentials not persisted, lxml ≥ 6.1 and cryptography ≥ 46.0.5 | The second run's scanners (zizmor, OSV) showed them | Full suite still 151 OK |
+| F-15 (no lock file) deferred to Phase 5 | No publish workflow yet; hashes matter once publishing is added | Recorded in the findings and threat model |
 
 ## Deviations from Plan
 
@@ -120,7 +121,8 @@ Test results:
 - Plan 04-02 and 04-03 remain for Phase 4. The user has not yet asked for any further fixes, so 04-02 is not planned.
 
 **Concerns:**
-- Phase 5 publishing needs CI pinning (F-11) and hash-pinned dependencies (F-12).
+- Phase 5 publishing needs hash-pinned dependencies (F-15). CI pinning is done.
+- Not assessed: the skill files under `.claude/skills` (excluded by the helper) and infrastructure.
 - The stray key file's origin is unknown.
 
 **Blockers:**
