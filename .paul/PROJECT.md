@@ -83,6 +83,7 @@ I can keep all my passwords in one encrypted local vault that I control, use it 
 | Decision | Rationale | Date | Status |
 |----------|-----------|------|--------|
 | Scope v1.3 to TOTP + backups among new features | Smallest high-value slice; browser/sync/passkeys deferred | 2026-10-30 | Active |
+| v1.4 closes daily-driver gaps in Python on pykeepass (merge, YubiKey, breach check, browser autofill); no Rust rewrite or custom crypto | Keeps audited KDBX crypto and KeePassXC compatibility | 2026-11-05 | Active |
 | Packaging targets: PyPI + `.desktop` launcher | Lowest-effort distribution; RPM/Flatpak later | 2026-10-30 | Active |
 | Implement TOTP with stdlib | Avoid new dependencies in a security tool | 2026-10-30 | Active |
 | Delete old-key backups after a verified re-key | A leaked old password mustn't open leftover backups | 2026-10-30 | Active |
@@ -97,7 +98,7 @@ I can keep all my passwords in one encrypted local vault that I control, use it 
 | CI test suite | All existing + new tests pass | 141 passing (last full run) | On track |
 | TOTP interoperability | Codes match KeePassXC for same entry | RFC vectors + phone check pass; real KeePassXC not run here | Met (partial evidence) |
 | Save safety | Failed/interrupted save never corrupts vault; last N backups restorable | Met (Phase 1) | ✓ |
-| Distribution | `pip install pwvault-manager` from PyPI; GUI in desktop app menu | 1.3.0 wheel builds and installs clean; not yet published | In progress |
+| Distribution | `pip install pwvault-manager` from PyPI; GUI in desktop app menu | `pwvault-manager` 1.3.0 published to PyPI 2026-11-05 | ✅ Met |
 | Security review | `/cso` finds no high-severity issues in changes | - | Not started |
 
 ## Tech Stack / Tools
@@ -110,7 +111,7 @@ I can keep all my passwords in one encrypted local vault that I control, use it 
 | GUI | Tkinter | `python3-tk` on Fedora/Debian |
 | Packaging | setuptools (`pyproject.toml`) | Entry points `pwvault`, `pwvault-gui` |
 | CI | GitHub Actions (`.github/workflows/tests.yml`) | |
-| Legacy migration | `cryptography` >= 42 (optional extra) | `.pwv` → `.kdbx` only |
+| Legacy migration | `cryptography` >= 50.0.2 (optional extra) | `.pwv` → `.kdbx` only |
 
 ## Links
 

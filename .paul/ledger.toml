@@ -81,3 +81,31 @@ action = "unify"
 phase = 4
 plan = "04-01"
 at = "2026-10-30T22:25:57-03:00"
+
+[[entry]]
+action = "milestone_complete"
+phase = 5
+at = "2026-11-05T12:00:00-04:00"
+
+[[entry]]
+action = "milestone_create"
+phase = 6
+at = "2026-11-05T12:00:00-04:00"
+
+[[entry]]
+action = "plan"
+phase = 6
+plan = "06-01"
+at = "2026-11-05T12:30:00-04:00"
+
+[[entry]]
+action = "apply"
+phase = 6
+plan = "06-01"
+at = "2026-11-05T15:00:00-04:00"
+
+[[entry]]
+action = "unify"
+phase = 6
+plan = "06-01"
+at = "2026-11-05T15:10:00-04:00"

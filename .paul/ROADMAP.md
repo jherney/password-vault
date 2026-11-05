@@ -8,105 +8,96 @@ about: "pwvault"
 
 ## Overview
 
-Take pwvault from 1.2.0 to a hardened, distributable release: fix remaining edge cases, add TOTP codes and automatic versioned backups, polish the GUI, and publish to PyPI with a desktop launcher.
+Close the gaps that keep pwvault from being a daily-driver password manager, without leaving Python, pykeepass or the KDBX format: merge vault copies edited on two devices, unlock with a YubiKey, check passwords against known breaches offline, and fill logins in the browser.
 
 ## Current Milestone
 
-**v1.3 Hardening, TOTP, Backups & Release** (v1.3.0)
-Status: In progress
-Phases: 4 of 5 complete (80%)
+**v1.4 Daily-driver gaps** (v1.4.0)
+Status: 🚧 In progress
+Phases: 0 of 4 complete (Phase 6: 1 of 2 plans)
+
+Constraints for every phase:
+- Stays on pykeepass; no custom crypto, no new vault format. A vault written by any phase must still open in KeePassXC.
+- Every write goes through `Vault._write()` (lock, conflict check, backup, atomic write).
+- Each phase ends with a `/cso` pass on its changes before it is marked complete.
 
 ## Phases
 
 | Phase | Name | Plans | Status | Completed |
 |-------|------|-------|--------|-----------|
-| 1 | Safe saves & backups | 1/1 | ✅ Complete | 2026-10-30 |
-| 2 | TOTP codes | 1/1 | ✅ Complete | 2026-10-30 |
-| 3 | GUI polish | 1/1 | ✅ Complete | 2026-10-30 |
-| 4 | Security review & hardening | 2/3 (04-02 not needed) | ✅ Complete | 2026-10-30 |
-| 5 | Packaging & release | 2/3 | In progress | - |
+| 6 | Vault merge | 1/2 | In progress | - |
+| 7 | YubiKey unlock | TBD | Not started | - |
+| 8 | Offline breach check | TBD | Not started | - |
+| 9 | Browser autofill | TBD | Not started | - |
 
 ## Phase Details
 
-### Phase 1: Safe saves & backups ✅
+### Phase 6: Vault merge
 
-**Goal:** Every save keeps a versioned backup; backups are listable/restorable; failed saves never corrupt the vault
+**Goal:** `pwvault merge OTHER.kdbx` combines two copies of a vault the way KeePassXC does, so editing on two devices never loses a change
 **Depends on:** Nothing (first phase)
-**Research:** Unlikely (existing atomic-save code)
+**Research:** Likely (KeePassXC merge rules: per-entry UUID match, LastModificationTime, history, DeletedObjects)
 
 **Scope:**
-- Backup-before-save in `Vault.save()`, keep last 10
-- `pwvault backup list|restore`
-- Purge old-key backups after re-key
-- Fault-injection tests for interrupted saves
+- Match entries and groups by UUID; the newer version wins, the older one goes into the entry's history
+- Honor deletions recorded in DeletedObjects; moves between groups follow the newer LocationChanged
+- Open the other vault with its own credentials; save once through `Vault._write()` (backed up)
+- Report what was added, updated and deleted; `--dry-run` shows it without saving
+- Interop test: a vault merged by pwvault and the same merge in keepassxc-cli give the same entries
+- Builds on, or replaces, `merge_records` (pwvault.py) used by CSV import
 
 **Plans:**
-- [x] 01-01: Backups on save, CLI restore, interrupted-save tests
+- [x] 06-01: merge engine (UUID match, history, moves, DeletedObjects, attachments, icons), `pwvault merge` CLI, keepassxc-cli interop test
+- [ ] 06-02: GUI Database > Merge… dialog
 
-### Phase 2: TOTP codes ✅
+### Phase 7: YubiKey unlock
 
-**Goal:** Store and generate TOTP codes compatible with KeePassXC's `otp` attribute, in CLI and GUI
-**Depends on:** Phase 1 (saves are backed up)
-**Research:** Likely (KeePassXC `otp` URI format and legacy TOTP fields)
-**Research topics:** `otpauth://` URI parsing, KeePassXC `TOTP Seed`/`TOTP Settings` legacy fields, RFC 6238 test vectors
+**Goal:** Unlock a vault with password + YubiKey HMAC-SHA1 challenge-response, in the same way KeePassXC does, so one vault works with the same key in both apps
+**Depends on:** Phase 6
+**Research:** Likely (KeePassXC challenge-response: challenge = master seed, response mixed into the composite key; yubikey-manager or ykchalresp as the driver)
 
 **Scope:**
-- Stdlib TOTP (RFC 6238) generator
-- CLI: set TOTP on an entry, copy the current code
-- GUI: show the live code with a countdown, copy it
+- CLI and GUI: unlock, init and re-key with a YubiKey slot
+- Clear errors when no key is plugged in or the slot is not configured
+- Optional dependency only; the vault opens without it when no YubiKey is configured
+- Verified against a vault created by KeePassXC with the same key
 
-**Plans:**
-- [x] 02-01: TOTP core (RFC 6238, KeePassXC formats), `pwvault totp` CLI, GUI live code
+**Plans:** TBD (defined during /paul:plan)
 
-### Phase 3: GUI polish ✅
+### Phase 8: Offline breach check
 
-**Goal:** A cleaner, faster GUI: modernized look, search, keyboard shortcuts, backup restore screen
-**Depends on:** Phases 1–2 (GUI surfaces backups and TOTP)
-**Research:** Unlikely
-
-**Scope:**
-- Light/dark palette that follows the desktop setting (chosen at startup)
-- Spacing and contrast tidy-up within both palettes
-- Restore-from-backup dialog (GUI)
-- Shortcut gaps (Ctrl+Shift+B for Backups)
-- Search as you type and Ctrl+F already exist; not re-planned
-
-**Plans:**
-- [x] 03-01: Backups dialog, desktop light/dark palette with a live Theme button, spacing and shortcut tidy-up
-
-### Phase 4: Security review & hardening
-
-**Goal:** `/cso` review of all v1.3 changes with no high-severity findings; QA-driven edge-case fixes
-**Depends on:** Phases 1–3
-**Research:** Unlikely
+**Goal:** `pwvault check` lists entries whose passwords appear in known breaches, without sending any password or hash prefix over the network during the check
+**Depends on:** Nothing (independent of Phases 6–7)
+**Research:** Likely (HIBP Pwned Passwords download size and format, sorted SHA-1 file, binary search)
 
 **Scope:**
-- Security audit (`/cso`) and fixes
-- QA pass (`/qa`) on CLI and GUI with regression tests
+- A download/update command for the hash list, kept outside the vault folder
+- Lookup by binary search over the sorted file; no full load into memory
+- Also flag reused and weak passwords from what is already in the vault
+- GUI: a report dialog that opens the flagged entries
 
-**Plans:**
-- [x] 04-01: Security audit (findings, threat model, data classification); re-key purge made crash-safe (F-01); key file ignored by git
-- [-] 04-02: not needed (no open high or medium findings)
-- [x] 04-03: QA pass on CLI and GUI; 4 defects fixed incl. trash restore to original group
+**Plans:** TBD (defined during /paul:plan)
 
-### Phase 5: Packaging & release
+### Phase 9: Browser autofill
 
-**Plans:**
-- [x] 05-01: Release readiness: hash-pinned lock file (F-15), version 1.3.0, changelog, drift test
-- [x] 05-02: Desktop launcher: per-user .desktop entry and icon via `pwvault-gui --install-launcher`
-- [ ] 05-03: PyPI release: trusted-publishing workflow written; name `pwvault-manager` (chosen); build and clean install verified. Waiting on: PyPI trusted publisher (manual), your approval to tag v1.3.0 (depends on 05-01)
-
-**Decided:** distribution name `pwvault-manager` (`pwvault` and `passguard` are taken on PyPI).
-
-**Goal:** `pip install pwvault` from PyPI; GUI in the desktop app menu; v1.3.0 tagged
-**Depends on:** Phase 4
-**Research:** Likely (PyPI trusted publishing from GitHub Actions)
+**Goal:** Fill and save logins in Firefox and Chromium from the unlocked pwvault
+**Depends on:** Phases 6–8 (largest and riskiest phase, done last)
+**Research:** Likely (WebExtension native messaging, KeePassXC-Browser protocol reuse vs. own, origin matching, phishing resistance)
 
 **Scope:**
-- PyPI publish workflow (trusted publishing)
-- `.desktop` file + icon, install helper
-- Version bump to 1.3.0, changelog, tag
+- Native messaging host started by the browser; talks only to an unlocked vault, asks before each fill
+- WebExtension that fills on exact origin match and offers to save new logins
+- Threat model and `/cso` review before anything ships
+
+**Plans:** TBD (defined during /paul:plan)
+
+---
+
+## Completed Milestones
+
+### v1.3 Hardening, TOTP, Backups & Release (complete 2026-11-05)
+Phases 1–5: safe saves and backups, TOTP codes, GUI polish, security review, packaging and PyPI release (`pwvault-manager` 1.3.0, tag v1.3.0 at ce9009e). Archive: milestones/1.3.0-ROADMAP.md
 
 ---
 *Roadmap created: 2026-10-30*
-*Last updated: 2026-10-30 after Phase 5 plan*
+*Last updated: 2026-11-05 — v1.3 complete, v1.4 Daily-driver gaps created*
