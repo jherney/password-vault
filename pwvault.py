@@ -384,7 +384,7 @@ def yubikey_transformed_key(params: dict, password, keyfile, yubikey: YubiKeySlo
     # challenge, and a YubiKey challenge holds at most 63 bytes plus padding.
     if (not all(isinstance(params.get(k), int) and params[k] > 0 for k in ("I", "M", "P", "V"))
             or params["M"] // 1024 < 8 * params["P"]
-            or params["V"] > 0xFFFFFFFF
+            or params["V"] not in (0x10, 0x13)  # the only Argon2 versions
             or not isinstance(params["S"], bytes)
             or not 8 <= len(params["S"]) <= 63):
         raise VaultError("vault file has invalid key-derivation settings")

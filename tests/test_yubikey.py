@@ -214,7 +214,7 @@ class YubiKeyVaultTests(Base):
                     {**good, "M": 8191}, {**good, "M": 16383, "P": 2},
                     {**good, "S": bytes(7)}, {**good, "S": "12345678"},
                     {**good, "S": 8}, {**good, "S": bytearray(8)},
-                    {**good, "V": 0x100000000}, {**good, "V": 0},
+                    {**good, "V": 0x100000000}, {**good, "V": 0}, {**good, "V": 18},
                     {**good, "M": 0}, {**good, "I": 0}):
             with yubikey() as key, self.assertRaisesRegex(VaultError, "invalid key-derivation settings"):
                 pwvault.yubikey_transformed_key(bad, PW, None, SLOT2)
