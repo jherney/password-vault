@@ -6,6 +6,7 @@ All notable changes to pwvault. The format follows [Keep a Changelog](https://ke
 
 ### Added
 - `pwvault merge OTHER.kdbx` merges another copy of the vault into this one, KeePassXC-style: entries and groups matched by UUID, the newer version wins and the other is kept in history, moves, the recycle bin and permanent deletions carry over. `--dry-run` shows the changes without saving; `--same-credentials` and `--other-keyfile` open the other copy.
+- GUI: Database > Merge another copy… shows every change from the other copy, then saves the merge (with a backup) or discards it.
 
 ### Changed
 - Permanently deleting an entry or group (from the recycle bin, or by emptying it) is recorded in the vault's standard deletion list, as KeePassXC does, so the deletion survives a merge.

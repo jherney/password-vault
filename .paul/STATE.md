@@ -8,30 +8,30 @@ about: "pwvault"
 
 ## Project Reference
 
-See: .paul/PROJECT.md (updated 2026-10-30)
+See: .paul/PROJECT.md (updated 2026-11-05)
 
 **Core value:** I can keep all my passwords in one encrypted local vault that I control, use it from the terminal or a GUI, and still open it in KeePass-compatible apps.
-**Current focus:** v1.4 Daily-driver gaps — Phase 6 Vault merge
+**Current focus:** v1.4 Daily-driver gaps — Phase 7 YubiKey unlock
 
 ## Current Position
 
 Milestone: v1.4 Daily-driver gaps
-Phase: 6 of 6–9 (Vault merge) — In progress
-Plan: 06-01 complete; 06-02 (GUI) next
-Status: Ready for next PLAN
-Last activity: 2026-11-05 — Unified 06-01: merge engine, `pwvault merge`, KeePassXC interop; full suite 183 OK
+Phase: 7 of 6–9 (YubiKey unlock)
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-11-05 — Phase 6 complete (06-01, 06-02), transitioned to Phase 7
 
 Progress:
 - v1.3 Hardening, TOTP, Backups & Release: [██████████] 100% ✓ (released 2026-11-05)
-- v1.4 Daily-driver gaps: [█░░░░░░░░░] 12%
-- Phase 6: [█████░░░░░] 50% (06-01 ✓, 06-02 GUI next)
+- v1.4 Daily-driver gaps: [██▌░░░░░░░] 25% (Phase 6 ✓)
+- Phase 7: [░░░░░░░░░░] 0%
 
 ## Loop Position
 
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ✓        ✓        ✓     [Loop complete - ready for next PLAN]
+  ○        ○        ○     [Ready for first PLAN of Phase 7]
 ```
 
 ## Accumulated Context
@@ -49,6 +49,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | 2026-10-30: 04-01 checkpoint: fix F-01 (durable re-key purge), close F-07, complete the audit gaps; no critical/high findings, so no 04-02 fix plan for F-02–F-12 | Phase 4 | F-01 fixed in pwvault.py; F-11 and F-12 deferred to Phase 5 |
 | All vault writes go through `Vault._write()` (lock, conflict check, backup, atomic write, prune) | Phase 1 | New save paths get backups for free |
 | 2026-11-05: `pwvault merge` applies permanent deletions (KeePassXC Synchronize rules), unlike KeePassXC's default KeepNewer merge | Phase 6 | Interop test expects the same result as keepassxc-cli except for permanently deleted entries |
+| 2026-11-05: GUI merge changes the vault in memory; Save writes once, Discard/Escape/close reload from disk (no password prompt); lock drops it | Phase 6 | Pattern for later in-memory-then-confirm dialogs |
 | 2026-11-05: Every move stamps LocationChanged and every permanent delete writes DeletedObjects (pykeepass does neither) | Phase 6 | Moves and deletions made in pwvault carry over in merges here and in KeePassXC; deletions made with 1.3 or earlier were not recorded |
 
 ### Deferred Issues
@@ -64,22 +65,21 @@ PLAN ──▶ APPLY ──▶ UNIFY
 ### Blockers/Concerns
 
 - Phase 1: ~~backups not opened in real KeePassXC~~ resolved 2026-10-30: a backup opens in keepassxc-cli 2.8.0 with correct TOTP.
-- Phase 6: `/cso` done 2026-11-05 (run 1793899968881-553cb096ceb6e924, partial, no supported findings; cryptography floor raised to 50.0.2 from its OSV triage). Manual GUI open of a merged vault still due before Phase 6 closes
 - Phase 1: after a re-key, only the purge keeps old-key backups from lingering; revisit in Phase 4's security review.
 - Resolved 04-03 (CLI-03 trash restore fixed in a follow-up): the stray `pwvault.keyx` was a test key file the user created by hand; the ignore rule stays.
 
 ### Git State
 
-Last commit: ce9009e (requirements.lock committed; v1.3.0 tag)
-Branch: vault-merge (from main at ce9009e), 06-01 and the cryptography floor committed, not pushed
+Last commit: tip of vault-merge, "feat(06-vault-merge): GUI merge dialog; Phase 6 complete"
+Branch: vault-merge (from main at ce9009e), Phase 6 committed, not pushed or merged
 Uncommitted: `.gstack/` and `pwvault.keyx` (both intentionally not committed)
 
 ## Session Continuity
 
 Last session: 2026-11-05
-Stopped at: 06-01 loop closed
-Next action: /paul:plan for 06-02 (GUI Database > Merge… dialog)
-Resume file: .paul/phases/06-vault-merge/06-01-SUMMARY.md
+Stopped at: Phase 6 complete, ready to plan Phase 7
+Next action: /paul:plan for Phase 7 (YubiKey unlock)
+Resume file: .paul/ROADMAP.md
 
 ---
 *STATE.md — Updated after every significant action*

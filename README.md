@@ -89,6 +89,8 @@ The GUI offers search across all groups, add/edit with a password generator, ent
 
 The GUI's colours are light or dark. By default it follows the desktop setting (KDE's window colour, or GNOME's color-scheme) and uses dark if that can't be read. To override it, click the Theme button in the top bar, which cycles System, Light and Dark. The choice applies straight away, including to open dialogs, and is saved in `~/.config/pwvault/settings.ini`, not in the vault.
 
+Database > Merge another copy… merges another copy of the vault into the open one, the same way `pwvault merge` does (see [Using the vault on two devices](#using-the-vault-on-two-devices)). Choose the file; leave "Same password and key file as this vault" ticked, or enter the other copy's own. The dialog lists every change (added, updated, moved, deleted) before anything is written: Save stores the merged vault once, keeping the current file as a backup, and Discard (or Escape) puts the open vault back the way it is on disk.
+
 Database > Backups lists the last versions of the vault, newest first. Restoring one asks first, keeps the current file as a backup, and locks the vault so you unlock to see the restored entries.
 
 ### Auto-lock

@@ -19,9 +19,9 @@ I can keep all my passwords in one encrypted local vault that I control, use it 
 | Attribute | Value |
 |-----------|-------|
 | Type | Application |
-| Version | 1.2.0 |
+| Version | 1.3.0 (1.4 in progress) |
 | Status | Production (personal use) |
-| Last Updated | 2026-10-30 |
+| Last Updated | 2026-11-05 |
 
 ## Requirements
 
@@ -45,20 +45,23 @@ I can keep all my passwords in one encrypted local vault that I control, use it 
 - ✓ Database > Backups dialog (Ctrl+Shift+B): list backups newest first, restore after confirmation — Phase 3
 - ✓ Light and dark palettes following the desktop setting, with a Theme button that applies live — Phase 3
 - ✓ WCAG contrast checked for both palettes; consistent label spacing in dialogs — Phase 3
+- ✓ PyPI release `pwvault-manager` 1.3.0 and desktop launcher — Phase 5
+- ✓ Merge two copies of a vault, KeePassXC-compatible (UUID match, history, moves, recycle bin, permanent deletions): `pwvault merge` and GUI Database > Merge another copy… — Phase 6
+- ✓ Permanent deletes recorded in DeletedObjects and moves stamp LocationChanged, so they carry over in merges here and in KeePassXC — Phase 6
 
 ### Active (In Progress)
 
-- None. Phase 4 (security review and hardening) is next.
+- v1.4 Daily-driver gaps: Phase 7 YubiKey unlock is next
 
 ### Planned (Next)
 
-- Phase 4: `/cso` review of v1.3 changes and QA-driven fixes (to be defined during /paul:plan)
-- Phase 5: PyPI release and `.desktop` launcher
+- Phase 7: YubiKey HMAC-SHA1 challenge-response unlock, KeePassXC-compatible
+- Phase 8: offline breach check (HIBP hash list)
+- Phase 9: browser autofill (WebExtension + native messaging)
 
 ### Out of Scope
 
-- Browser integration — deferred to a later milestone
-- Folder sync with conflict merge — deferred; backups first
+- Automatic folder sync or watching for conflict files — merge is manual (`pwvault merge` / GUI); browser integration moved into v1.4 Phase 9
 - Passkeys — complex, poor Python library support
 
 ## Constraints
@@ -87,6 +90,7 @@ I can keep all my passwords in one encrypted local vault that I control, use it 
 | Packaging targets: PyPI + `.desktop` launcher | Lowest-effort distribution; RPM/Flatpak later | 2026-10-30 | Active |
 | Implement TOTP with stdlib | Avoid new dependencies in a security tool | 2026-10-30 | Active |
 | Delete old-key backups after a verified re-key | A leaked old password mustn't open leftover backups | 2026-10-30 | Active |
+| Merge applies permanent deletions (KeePassXC Synchronize rules), unlike KeePassXC's default KeepNewer merge | Two-device use must not bring deleted passwords back | 2026-11-05 | Active |
 | Every vault write goes through `Vault._write()` | One place for lock, conflict check, backup and atomic write | 2026-10-30 | Active |
 | Theme follows the desktop by default; in-app override saved outside the vault and applied live | Keeps vault format unchanged; the user asked for a control, then for it to apply immediately | 2026-10-30 | Active |
 | Restore via `Vault.restore()` only, after confirmation | One verified path; GUI never copies backup files | 2026-10-30 | Active |
@@ -95,11 +99,11 @@ I can keep all my passwords in one encrypted local vault that I control, use it 
 
 | Metric | Target | Current | Status |
 |--------|--------|---------|--------|
-| CI test suite | All existing + new tests pass | 141 passing (last full run) | On track |
+| CI test suite | All existing + new tests pass | 195 passing (last full run, 2026-11-05) | On track |
 | TOTP interoperability | Codes match KeePassXC for same entry | RFC vectors + phone check pass; real KeePassXC not run here | Met (partial evidence) |
 | Save safety | Failed/interrupted save never corrupts vault; last N backups restorable | Met (Phase 1) | ✓ |
 | Distribution | `pip install pwvault-manager` from PyPI; GUI in desktop app menu | `pwvault-manager` 1.3.0 published to PyPI 2026-11-05 | ✅ Met |
-| Security review | `/cso` finds no high-severity issues in changes | - | Not started |
+| Security review | `/cso` finds no high-severity issues in changes | Phase 6: no supported findings (run 1793899968881-553cb096ceb6e924) | ✅ Met for Phase 6 |
 
 ## Tech Stack / Tools
 
@@ -121,4 +125,4 @@ I can keep all my passwords in one encrypted local vault that I control, use it 
 
 ---
 *Created: 2026-10-30*
-*Last updated: 2026-10-30 after Phase 3*
+*Last updated: 2026-11-05 after Phase 6*

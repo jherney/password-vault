@@ -343,6 +343,35 @@ class KeePassXCInteropTests(MergeBase):
 OTHER_PW = "the other copy has its own long password"
 
 
+class OpenOtherCopyTests(MergeBase):
+    """open_other_copy() is shared by the CLI and the GUI."""
+
+    def test_opens_read_only(self):
+        before = self.path_b.read_bytes()
+        kp = pwvault.open_other_copy(self.path, self.path_b, PW, None)
+        self.assertEqual(snapshot(kp), snapshot(self.b().kp))
+        self.assertEqual(self.path_b.read_bytes(), before)
+
+    def test_refuses_the_vault_itself_and_a_symlink_to_it(self):
+        link = self.tmp / "link.kdbx"
+        link.symlink_to(self.path)
+        for target in (self.path, link):
+            with self.assertRaisesRegex(pwvault.VaultError, "this vault itself"):
+                pwvault.open_other_copy(self.path, target, PW, None)
+
+    def test_errors_name_the_file(self):
+        with self.assertRaisesRegex(pwvault.VaultError, "no file at"):
+            pwvault.open_other_copy(self.path, self.tmp / "nope.kdbx", PW, None)
+        with self.assertRaisesRegex(pwvault.VaultError, r"copy\.kdbx: wrong master password"):
+            pwvault.open_other_copy(self.path, self.path_b, "not the password", None)
+        with self.assertRaisesRegex(pwvault.VaultError, "key file not found"):
+            pwvault.open_other_copy(self.path, self.path_b, PW, self.tmp / "missing.keyx")
+        junk = self.tmp / "junk.kdbx"
+        junk.write_bytes(b"not a keepass file")
+        with self.assertRaisesRegex(pwvault.VaultError, r"junk\.kdbx: "):
+            pwvault.open_other_copy(self.path, junk, PW, None)
+
+
 class MergeCliTests(MergeBase):
     def run_cli(self, *argv, prompts=()):
         """Run `pwvault merge`; getpass answers PW for this vault, then each of prompts."""

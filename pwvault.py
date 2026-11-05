@@ -936,6 +936,26 @@ class MergeReport:
         return bool(self.added or self.updated or self.moved or self.deleted or self.metadata)
 
 
+def check_other_copy(vault_path: Path, other: Path) -> None:
+    """The other copy must exist and be a different file from the vault (symlinks count)."""
+    if not other.is_file():
+        raise VaultError(f"no file at {other}")
+    if vault_path.exists() and os.path.samefile(other, vault_path):
+        raise VaultError(f"{other} is this vault itself; give the path of another copy")
+
+
+def open_other_copy(vault_path: Path, other: Path, password, keyfile) -> PyKeePass:
+    """Open another copy of the vault for merge_vaults, read-only (it is never written). Used by
+    both the CLI and the GUI; errors name the file."""
+    check_other_copy(vault_path, other)
+    if keyfile and not Path(keyfile).is_file():
+        raise VaultError(f"key file not found: {keyfile}")
+    try:
+        return load_kdbx(other.read_bytes(), password or None, str(keyfile) if keyfile else None)
+    except VaultError as e:
+        raise VaultError(f"{other}: {e}")
+
+
 def merge_vaults(vault: Vault, other: PyKeePass) -> MergeReport:
     """Merge another copy of the vault into this one, in memory. `other` is only read; the caller
     saves `vault` (so the merge is backed up and conflict-checked like any save)."""
@@ -1435,25 +1455,15 @@ def cmd_import(args):
 
 
 def cmd_merge(args):
-    if not args.other.is_file():
-        raise VaultError(f"no file at {args.other}")
-    if args.vault.exists() and os.path.samefile(args.other, args.vault):
-        raise VaultError(f"{args.other} is this vault itself; give the path of another copy")
+    check_other_copy(args.vault, args.other)  # before asking for any password
     if args.same_credentials and args.other_keyfile:
         raise VaultError("use either --same-credentials or --other-keyfile, not both")
     vault = unlock(args)
     if args.same_credentials:
         password, keyfile = vault.kp.password, vault.kp.keyfile
     else:
-        password = getpass.getpass(f"Master password for {args.other}: ")
-        keyfile = args.other_keyfile
-        if keyfile and not keyfile.is_file():
-            raise VaultError(f"key file not found: {keyfile}")
-    try:  # read only: the other copy is never written
-        other = load_kdbx(args.other.read_bytes(), password or None, str(keyfile) if keyfile else None)
-    except VaultError as e:
-        raise VaultError(f"{args.other}: {e}")
-    report = merge_vaults(vault, other)
+        password, keyfile = getpass.getpass(f"Master password for {args.other}: "), args.other_keyfile
+    report = merge_vaults(vault, open_other_copy(args.vault, args.other, password, keyfile))
     for mark, items in (("+", report.added), ("~", report.updated), (">", report.moved),
                         ("-", report.deleted)):
         for path, title in items:

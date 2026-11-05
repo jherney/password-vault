@@ -14,7 +14,7 @@ Close the gaps that keep pwvault from being a daily-driver password manager, wit
 
 **v1.4 Daily-driver gaps** (v1.4.0)
 Status: 🚧 In progress
-Phases: 0 of 4 complete (Phase 6: 1 of 2 plans)
+Phases: 1 of 4 complete (25%)
 
 Constraints for every phase:
 - Stays on pykeepass; no custom crypto, no new vault format. A vault written by any phase must still open in KeePassXC.
@@ -25,14 +25,14 @@ Constraints for every phase:
 
 | Phase | Name | Plans | Status | Completed |
 |-------|------|-------|--------|-----------|
-| 6 | Vault merge | 1/2 | In progress | - |
+| 6 | Vault merge | 2/2 | ✅ Complete | 2026-11-05 |
 | 7 | YubiKey unlock | TBD | Not started | - |
 | 8 | Offline breach check | TBD | Not started | - |
 | 9 | Browser autofill | TBD | Not started | - |
 
 ## Phase Details
 
-### Phase 6: Vault merge
+### Phase 6: Vault merge ✅
 
 **Goal:** `pwvault merge OTHER.kdbx` combines two copies of a vault the way KeePassXC does, so editing on two devices never loses a change
 **Depends on:** Nothing (first phase)
@@ -48,7 +48,7 @@ Constraints for every phase:
 
 **Plans:**
 - [x] 06-01: merge engine (UUID match, history, moves, DeletedObjects, attachments, icons), `pwvault merge` CLI, keepassxc-cli interop test
-- [ ] 06-02: GUI Database > Merge… dialog
+- [x] 06-02: GUI Database > Merge another copy… dialog (preview, Save, Discard); `open_other_copy()` shared with the CLI
 
 ### Phase 7: YubiKey unlock
 
@@ -100,4 +100,4 @@ Phases 1–5: safe saves and backups, TOTP codes, GUI polish, security review, p
 
 ---
 *Roadmap created: 2026-10-30*
-*Last updated: 2026-11-05 — v1.3 complete, v1.4 Daily-driver gaps created*
+*Last updated: 2026-11-05 — Phase 6 complete*
