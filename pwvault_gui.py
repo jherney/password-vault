@@ -829,6 +829,9 @@ class CheckDialog(Dialog):
                                    state="normal" if findings else "disabled")
         self.show_btn.pack(side="right", padx=4)
         self.show()
+        # Take the keyboard even if the window manager left it on the main window, so Return and
+        # Escape reach this modal report without a click first.
+        (self.tree if findings else self).focus_force()
 
     @staticmethod
     def summary(findings, checked) -> str:

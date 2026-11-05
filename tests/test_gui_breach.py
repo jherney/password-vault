@@ -115,9 +115,11 @@ class CheckDialogTests(BreachBase):
         self.assert_jumped_to(d, entry)
 
     def press_return(self, d):
-        d.tree.focus_force()  # Tk sends key presses to the focused widget
-        self.app.root.update()
-        d.tree.event_generate("<Return>")
+        # Tk sends key presses to the focused widget, so press Return wherever the focus is: the
+        # report must take it when it opens, without a click.
+        focused = self.app.root.focus_get()
+        self.assertTrue(str(focused).startswith(str(d)), focused)
+        focused.event_generate("<Return>")
 
     def test_show_entry_button_and_return(self):
         for title, press in (("Router", lambda d: d.show_btn.invoke()),

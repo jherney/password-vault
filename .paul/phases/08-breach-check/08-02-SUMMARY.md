@@ -118,6 +118,10 @@ test_cli_qa.py:        4 passed
 2. **No-list note:** the store's error already says to run `pwvault breach update`, so the hint says only that it runs in a terminal and downloads ~55 GB once (plan wording repeated the command).
 3. **Summary counts:** `CheckDialog.summary()` repeats the few lines of counting in `cmd_check()`; sharing them would change pwvault.py, which the plan's boundaries protect.
 
+### Review fix (CodeRabbit, PR #9)
+
+- The report never took keyboard focus, so Return/Escape could go to the main window if the window manager left focus there. It now calls `focus_force()` on the list (or the dialog when empty). The Return test no longer forces focus itself; it presses Return wherever the focus is, and failed before the fix.
+
 ### Deferred Items
 
 - The no-list note shows the shared VaultError text with literal backticks (`` `pwvault breach update` ``) and wraps mid-command; approved as-is at the checkpoint.
