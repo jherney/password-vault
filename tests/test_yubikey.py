@@ -210,10 +210,27 @@ class YubiKeyVaultTests(Base):
         good = {"$UUID": bytes.fromhex("ef636ddf8c29444b91f7a9a403e30a0c"), "S": bytes(32),
                 "I": 2, "M": 1 << 20, "P": 1, "V": 19}
         for bad in ({k: v for k, v in good.items() if k != "M"}, {**good, "P": 0},
-                    {**good, "S": bytes(64)}, {**good, "I": b"x"}):
+                    {**good, "S": bytes(64)}, {**good, "I": b"x"},
+                    {**good, "M": 8191}, {**good, "M": 16383, "P": 2},
+                    {**good, "S": bytes(7)}, {**good, "S": "12345678"},
+                    {**good, "S": 8}, {**good, "S": bytearray(8)},
+                    {**good, "V": 0x100000000}, {**good, "V": 0},
+                    {**good, "M": 0}, {**good, "I": 0}):
             with yubikey() as key, self.assertRaisesRegex(VaultError, "invalid key-derivation settings"):
                 pwvault.yubikey_transformed_key(bad, PW, None, SLOT2)
             key.assert_not_called()  # rejected before the YubiKey is asked
+
+    def test_argon2_boundary_settings_are_accepted(self):
+        for version in (0x10, 0x13):
+            for salt_length in (8, 63):
+                with self.subTest(version=version, salt_length=salt_length):
+                    params = {"$UUID": bytes.fromhex("ef636ddf8c29444b91f7a9a403e30a0c"),
+                              "S": bytes(salt_length), "I": 1, "M": 16 * 1024,
+                              "P": 2, "V": version}
+                    with yubikey() as key:
+                        result = pwvault.yubikey_transformed_key(params, PW, None, SLOT2)
+                    self.assertEqual(len(result), 32)
+                    key.assert_called_once_with(SLOT2, params["S"])
 
     def test_vaults_without_a_yubikey_never_ask(self):
         with patch.object(pwvault, "challenge_response") as key:

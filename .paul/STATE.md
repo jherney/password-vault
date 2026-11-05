@@ -75,14 +75,32 @@ PLAN ──▶ APPLY ──▶ UNIFY
 ### Git State
 
 Last commit: 0a11adb (07-01 YubiKey CLI), pushed
-Branch: yubikey-gui (Phase 7 complete, PR #6 open to main); main at 0a11adb
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:e9841dda2a74550f73982fab75c1c307505f91cc398034a64406db51443f9494 -->
+
+Branch: yubikey-gui (PR #6 merged; PR #7 open with follow-up fixes not yet on main); PR #6 merged as 54901f7
+
+<!-- /coderabbit-ai-generated:v1 -->
 Uncommitted: `.gstack/` and `pwvault.keyx` (both intentionally not committed)
 
 ## Session Continuity
 
 Last session: 2026-11-05
-Stopped at: Phase 7 complete, ready to plan Phase 8 (PR #6 to merge)
-Next action: merge PR #6, then /paul:plan for Phase 8 (Offline breach check)
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:8908c822008441c828418c401ec0a8d6656eb03402883b28811b37243487860f -->
+
+Stopped at: Phase 7 complete; PR #6 merged, PR #7 follow-up fixes pending on main
+
+<!-- /coderabbit-ai-generated:v1 -->
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:abeec1f78900df88ce5ef101ef7623cc8715e4e1b2503384267878bcde1a04d9 -->
+
+Next action: incorporate PR #7 into main, then /paul:plan for Phase 8 (Offline breach check)
+
+<!-- /coderabbit-ai-generated:v1 -->
 Resume file: .paul/ROADMAP.md
 
 ---

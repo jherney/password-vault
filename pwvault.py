@@ -383,7 +383,10 @@ def yubikey_transformed_key(params: dict, password, keyfile, yubikey: YubiKeySlo
     # From the file's header: a crafted file gets a clean error, not a crash. The salt is the
     # challenge, and a YubiKey challenge holds at most 63 bytes plus padding.
     if (not all(isinstance(params.get(k), int) and params[k] > 0 for k in ("I", "M", "P", "V"))
-            or len(params["S"]) > 63):
+            or params["M"] // 1024 < 8 * params["P"]
+            or params["V"] > 0xFFFFFFFF
+            or not isinstance(params["S"], bytes)
+            or not 8 <= len(params["S"]) <= 63):
         raise VaultError("vault file has invalid key-derivation settings")
     import argon2.low_level as argon2_ll  # pykeepass's own dependency
     response = challenge_response(yubikey, params["S"])
