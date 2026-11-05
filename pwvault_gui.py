@@ -787,6 +787,76 @@ class MergeDialog(Dialog):
             self.destroy()
 
 
+class CheckDialog(Dialog):
+    """Database > Check passwords…: entries whose password is breached, reused or weak (from
+    pwvault.check_vault()). Show entry closes the report and selects the entry in the main window."""
+
+    UPDATE_HINT = "That command runs in a terminal and downloads about 55 GB once."
+
+    def __init__(self, app):
+        super().__init__(app, "Check passwords")
+        try:
+            with pwvault.BreachStore() as store:
+                findings = pwvault.check_vault(app.vault, store)
+            note = ""
+        except VaultError as err:
+            findings = pwvault.check_vault(app.vault)
+            note = f"Breached passwords not checked. {sentence(err)} {self.UPDATE_HINT}"
+        self.findings = {str(i): f for i, f in enumerate(findings)}
+        b = self.body
+        ttk.Label(b, text=self.summary(findings, len(pwvault.checked_entries(app.vault)))).pack(anchor="w")
+        if note:
+            ttk.Label(b, text=note, style="Muted.TLabel", wraplength=520).pack(anchor="w", pady=(4, 0))
+        if findings:
+            self.tree = ttk.Treeview(b, columns=("title", "username", "group", "issues"), show="headings",
+                                     height=min(12, len(findings)), selectmode="browse")
+            for col, heading, width in (("title", "Title", 160), ("username", "Username", 130),
+                                        ("group", "Group", 130), ("issues", "Issues", 220)):
+                self.tree.heading(col, text=heading)
+                self.tree.column(col, width=width, anchor="w")
+            for iid, f in self.findings.items():
+                e = f.entry
+                self.tree.insert("", "end", iid=iid, values=(
+                    e.title or "(no title)", e.username or "", app.vault.group_path(e.group), self.issues(f)))
+            self.tree.pack(fill="both", expand=True, pady=(8, 0))
+            self.tree.selection_set("0")
+            self.tree.bind("<Double-1>", lambda ev: self.show_entry())
+            self.bind("<Return>", lambda ev: self.show_entry())
+        btns = ttk.Frame(b)
+        btns.pack(fill="x", pady=(10, 0))
+        ttk.Button(btns, text="Close", command=self.destroy).pack(side="right")
+        self.show_btn = ttk.Button(btns, text="Show entry", style="Accent.TButton", command=self.show_entry,
+                                   state="normal" if findings else "disabled")
+        self.show_btn.pack(side="right", padx=4)
+        self.show()
+
+    @staticmethod
+    def summary(findings, checked) -> str:
+        if not findings:
+            return f"No problems found in {checked} entr{'y' if checked == 1 else 'ies'}."
+        count = {i: sum(i in f.issues for f in findings) for i in ("breached", "reused", "weak")}
+        return (f"{len(findings)} of {checked} entr{'y' if checked == 1 else 'ies'} flagged "
+                f"({count['breached']} breached, {count['reused']} reused, {count['weak']} weak).")
+
+    @staticmethod
+    def issues(finding) -> str:
+        parts = []
+        for issue in finding.issues:
+            if issue == "reused":
+                issue += " with " + ", ".join(o.title or "(no title)" for o in finding.reused_with)
+            parts.append(issue)
+        return "; ".join(parts)
+
+    def show_entry(self):
+        sel = self.tree.selection() if self.findings else ()
+        if not sel:
+            return
+        entry = self.findings[sel[0]].entry
+        app = self.app
+        self.destroy()
+        app.show_group(entry.group, select=entry)
+
+
 class GeneratorDialog(Dialog):
     def __init__(self, app):
         super().__init__(app, "Password generator")
@@ -1567,6 +1637,7 @@ class App:
         m.add_separator()
         m.add_command(label="Backups…", command=self.open_backups)
         m.add_command(label="Merge another copy…", command=self.open_merge)
+        m.add_command(label="Check passwords…", command=self.open_check)
         m.add_command(label="Empty recycle bin…", command=self.empty_bin)
         m.add_command(label="Change master key…", command=lambda: ChangeMasterDialog(self))
         m.add_separator()
@@ -1586,6 +1657,10 @@ class App:
     def open_merge(self):
         if self.vault is not None:
             MergeDialog(self)
+
+    def open_check(self):
+        if self.vault is not None:
+            CheckDialog(self)
 
     def empty_bin(self):
         if not messagebox.askyesno("Empty recycle bin", "Permanently delete everything in the recycle bin?",
