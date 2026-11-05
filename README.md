@@ -195,4 +195,6 @@ uv pip compile requirements.txt --universal --python-version 3.10 --generate-has
 
 ## License
 
-MIT License. See [LICENSE](LICENSE).
+GNU General Public License v3.0 or later (GPL-3.0-or-later). See [LICENSE](LICENSE).
+
+Releases up to and including 1.3.0 were published under the MIT License and stay available under it.

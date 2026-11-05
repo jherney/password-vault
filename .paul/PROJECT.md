@@ -91,6 +91,7 @@ I can keep all my passwords in one encrypted local vault that I control, use it 
 | Implement TOTP with stdlib | Avoid new dependencies in a security tool | 2026-10-30 | Active |
 | Delete old-key backups after a verified re-key | A leaked old password mustn't open leftover backups | 2026-10-30 | Active |
 | Merge applies permanent deletions (KeePassXC Synchronize rules), unlike KeePassXC's default KeepNewer merge | Two-device use must not bring deleted passwords back | 2026-11-05 | Active |
+| License GPL-3.0-or-later from 1.4 (was MIT; 1.3.0 and earlier stay MIT) | Matches pykeepass (GPL-3.0) and lets KeePassXC's GPL test data live in the repo | 2026-11-05 | Active |
 | Every vault write goes through `Vault._write()` | One place for lock, conflict check, backup and atomic write | 2026-10-30 | Active |
 | Theme follows the desktop by default; in-app override saved outside the vault and applied live | Keeps vault format unchanged; the user asked for a control, then for it to apply immediately | 2026-10-30 | Active |
 | Restore via `Vault.restore()` only, after confirmation | One verified path; GUI never copies backup files | 2026-10-30 | Active |

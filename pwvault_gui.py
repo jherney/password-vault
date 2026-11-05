@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 jherney
 """pwvault GUI — Tkinter front end for pwvault's KeePass (.kdbx) vault.
 
 Uses the same vault file and code as the `pwvault.py` CLI.

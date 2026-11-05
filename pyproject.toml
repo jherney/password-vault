@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=64"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +7,8 @@ name = "pwvault-manager"
 dynamic = ["version"]
 description = "A small, local password manager with a KeePass (.kdbx) vault, a CLI and a Tk GUI"
 readme = "README.md"
-license = { text = "MIT" }
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = [
     "pykeepass==4.2.0",
@@ -16,7 +17,6 @@ dependencies = [
 classifiers = [
     "Environment :: Console",
     "Environment :: X11 Applications",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX",
     "Programming Language :: Python :: 3",
     "Topic :: Security",

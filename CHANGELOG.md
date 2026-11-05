@@ -9,6 +9,7 @@ All notable changes to pwvault. The format follows [Keep a Changelog](https://ke
 - GUI: Database > Merge another copy… shows every change from the other copy, then saves the merge (with a backup) or discards it.
 
 ### Changed
+- License changed from MIT to GPL-3.0-or-later, the license of pykeepass, which pwvault is built on. Releases up to 1.3.0 remain available under MIT.
 - Permanently deleting an entry or group (from the recycle bin, or by emptying it) is recorded in the vault's standard deletion list, as KeePassXC does, so the deletion survives a merge.
 - Moving an entry or group (including to and from the recycle bin) now updates its location-changed time, so a merge here or in KeePassXC knows which copy moved it last.
 
