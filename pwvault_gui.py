@@ -546,6 +546,138 @@ class BackupsDialog(Dialog):
         self.app.lock(f"Restored the backup from {when.astimezone():%Y-%m-%d %H:%M:%S}. Unlock to continue.")
 
 
+class MergeDialog(Dialog):
+    """Merge another copy of the vault (for example a sync conflict file) into the open one. The
+    merge happens in memory; Save writes it once (backed up), Discard reloads the file from disk."""
+
+    KINDS = (("added", "Added"), ("updated", "Updated"), ("moved", "Moved"), ("deleted", "Deleted"))
+
+    def __init__(self, app):
+        super().__init__(app, "Merge another copy")
+        self.merged = False  # the open vault holds an unsaved merge
+        self.other = tk.StringVar()
+        self.same = tk.BooleanVar(value=True)
+        self.password = tk.StringVar()
+        b = self.body
+        ttk.Label(b, text="Other copy").grid(row=0, column=0, sticky="w", pady=4, padx=(0, 10))
+        row = ttk.Frame(b)
+        row.grid(row=0, column=1, sticky="ew")
+        ttk.Entry(row, textvariable=self.other, width=36).pack(side="left", fill="x", expand=True)
+        ttk.Button(row, text="Browse…", command=self.browse).pack(side="left", padx=(4, 0))
+        ttk.Label(b, text="For example a sync conflict copy such as vault.sync-conflict-….kdbx",
+                  style="Muted.TLabel").grid(row=1, column=1, sticky="w")
+        ttk.Checkbutton(b, text="Same password and key file as this vault", variable=self.same,
+                        command=self.toggle_credentials).grid(row=2, column=0, columnspan=2, sticky="w",
+                                                              pady=(8, 4))
+        ttk.Label(b, text="Password").grid(row=3, column=0, sticky="w", pady=4, padx=(0, 10))
+        self.pw_field = PasswordField(b, self.password)
+        self.pw_field.grid(row=3, column=1, sticky="ew")
+        ttk.Label(b, text="Key file").grid(row=4, column=0, sticky="w", pady=4, padx=(0, 10))
+        self.keyfile = KeyFileField(b, app)
+        self.keyfile.grid(row=4, column=1, sticky="ew")
+        self.error = ttk.Label(b, style="Error.TLabel", wraplength=420)
+        self.error.grid(row=5, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        btns = ttk.Frame(b)
+        btns.grid(row=6, column=0, columnspan=2, sticky="e", pady=(10, 0))
+        ttk.Button(btns, text="Cancel", command=self.destroy).pack(side="left", padx=4)
+        ttk.Button(btns, text="Merge", style="Accent.TButton", command=self.merge).pack(side="left")
+        self.bind("<Return>", lambda e: self.merge())
+        # Leaving by Escape or the window's close button must never keep an unsaved merge in memory.
+        self.bind("<Escape>", lambda e: self.close())
+        self.protocol("WM_DELETE_WINDOW", self.close)
+        self.toggle_credentials()
+        self.show()
+
+    def browse(self):
+        path = filedialog.askopenfilename(
+            parent=self, title="Select the other copy of the vault",
+            initialdir=str(Path(self.app.vault.path).parent),
+            filetypes=[("KeePass databases", "*.kdbx"), ("All files", "*")])
+        if path:
+            self.other.set(path)
+
+    def toggle_credentials(self):
+        state = "disabled" if self.same.get() else "normal"
+        for field in (self.pw_field, self.keyfile):
+            for w in field.winfo_children():
+                w.configure(state=state)
+
+    def merge(self):
+        if self.merged or self.app.vault is None:
+            return
+        path = self.other.get().strip()
+        if not path:
+            return self.error.configure(text="Choose the other copy first.")
+        vault = self.app.vault
+        if self.same.get():
+            password, keyfile = vault.kp.password, vault.kp.keyfile
+        else:
+            password, keyfile = self.password.get(), self.keyfile.get()
+        try:
+            with self.app.busy():
+                other = pwvault.open_other_copy(vault.path, Path(path).expanduser(), password, keyfile)
+                report = pwvault.merge_vaults(vault, other)
+        except (VaultError, OSError) as e:
+            return self.error.configure(text=str(e).capitalize() + ".")
+        self.merged = report.changed
+        self.show_report(report, Path(path).name)
+
+    def show_report(self, report, name):
+        for w in self.body.winfo_children():
+            w.destroy()
+        b = self.body
+        btns = ttk.Frame(b)
+        if not report.changed:
+            ttk.Label(b, text="Already up to date.").pack(anchor="w")
+            btns.pack(fill="x", pady=(10, 0))
+            ttk.Button(btns, text="Close", command=self.destroy).pack(side="right")
+            self.bind("<Return>", lambda e: self.destroy())
+            return
+        self.name = name
+        self.counts = {k: len(getattr(report, k)) for k, _ in self.KINDS}
+        rows = [(label, path, title) for k, label in self.KINDS for path, title in getattr(report, k)]
+        if rows:
+            self.tree = ttk.Treeview(b, columns=("change", "group", "title"), show="headings",
+                                     height=min(12, len(rows)), selectmode="none")
+            for col, text, width in (("change", "Change", 90), ("group", "Group", 180), ("title", "Title", 220)):
+                self.tree.heading(col, text=text)
+                self.tree.column(col, width=width, anchor="w")
+            for r in rows:
+                self.tree.insert("", "end", values=r)
+            self.tree.pack(fill="both", expand=True)
+        else:
+            ttk.Label(b, text="Only internal records change (deletion records, icons or the recycle bin).",
+                      wraplength=420).pack(anchor="w")
+        ttk.Label(b, text=self.totals()).pack(anchor="w", pady=(8, 0))
+        ttk.Label(b, text="Nothing is saved until you press Save. The current file is kept as a backup.",
+                  style="Muted.TLabel", wraplength=420).pack(anchor="w", pady=(4, 0))
+        btns.pack(fill="x", pady=(10, 0))
+        ttk.Button(btns, text="Save", style="Accent.TButton", command=self.save).pack(side="right")
+        ttk.Button(btns, text="Discard", command=self.close).pack(side="right", padx=4)
+        self.bind("<Return>", lambda e: self.save())
+
+    def totals(self) -> str:
+        return ", ".join(f"{n} {k}" for k, n in self.counts.items()) + "."
+
+    def save(self):
+        if not self.merged:
+            return
+        if not self.app.save():  # it reports the failure and locks, which closes this dialog
+            return
+        self.merged = False
+        self.app.refresh_groups()
+        self.app.status(f"Merged {self.name}: {self.totals()}")
+        self.destroy()
+
+    def close(self):
+        """Cancel, Discard, Escape or the close button: drop any unsaved merge."""
+        if self.merged:
+            self.merged = False
+            self.app.reload_from_disk("Merge discarded.")
+        if self.winfo_exists():  # a failed reload locks the vault, which closes this dialog
+            self.destroy()
+
+
 class GeneratorDialog(Dialog):
     def __init__(self, app):
         super().__init__(app, "Password generator")
@@ -767,6 +899,19 @@ class App:
             messagebox.showerror("Save failed", str(err).capitalize() + ".", parent=self.root)
             self.lock("Not saved — vault reloaded from disk.")
             return False
+
+    def reload_from_disk(self, msg=""):
+        """Drop in-memory changes by opening the vault file again with the key already in use, so
+        the password isn't asked for. If that fails, lock (the next unlock reads the file)."""
+        v = self.vault
+        try:
+            with self.busy():
+                self.vault = Vault.open(v.path, v.kp.password, v.kp.keyfile)
+        except (VaultError, OSError) as err:
+            return self.lock(f"{msg} Couldn't reload the vault ({err}); unlock to continue.".strip())
+        self.refresh_groups()
+        if msg:
+            self.status(msg)
 
     # ---------------------------------------------------------- unlock / create / migrate screen
 
@@ -1288,6 +1433,7 @@ class App:
         m.add_cascade(label="Export", menu=exp)
         m.add_separator()
         m.add_command(label="Backups…", command=self.open_backups)
+        m.add_command(label="Merge another copy…", command=self.open_merge)
         m.add_command(label="Empty recycle bin…", command=self.empty_bin)
         m.add_command(label="Change master key…", command=lambda: ChangeMasterDialog(self))
         m.add_separator()
@@ -1303,6 +1449,10 @@ class App:
     def open_backups(self):
         if self.vault is not None:  # the shortcut also fires on the unlock screen, where there's no vault
             BackupsDialog(self)
+
+    def open_merge(self):
+        if self.vault is not None:
+            MergeDialog(self)
 
     def empty_bin(self):
         if not messagebox.askyesno("Empty recycle bin", "Permanently delete everything in the recycle bin?",
