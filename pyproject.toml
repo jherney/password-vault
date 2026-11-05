@@ -3,7 +3,7 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pwvault"
+name = "pwvault-manager"
 dynamic = ["version"]
 description = "A small, local password manager with a KeePass (.kdbx) vault, a CLI and a Tk GUI"
 readme = "README.md"

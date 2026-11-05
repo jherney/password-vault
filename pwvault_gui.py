@@ -6,8 +6,10 @@ Uses the same vault file and code as the `pwvault.py` CLI.
 
 import configparser
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import tkinter as tk
 from pathlib import Path
 from time import monotonic, time
@@ -1362,8 +1364,81 @@ class App:
         self.root.mainloop()
 
 
+ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect x="8" y="28" width="48" height="30" rx="5" fill="#4263eb"/>
+  <path d="M20 30V20a12 12 0 0 1 24 0v10" fill="none" stroke="#4263eb" stroke-width="6"/>
+  <circle cx="32" cy="41" r="4" fill="#ffffff"/>
+</svg>
+"""
+
+DESKTOP_ENTRY = """[Desktop Entry]
+Type=Application
+Name=pwvault
+Comment=Local password manager with a KeePass vault
+Exec={exec}
+Icon=pwvault
+Terminal=false
+Categories=Utility;Security;
+"""
+
+
+def launcher_paths(home: Path | None = None) -> tuple[Path, Path]:
+    """Per-user desktop entry and icon, under XDG_DATA_HOME (default ~/.local/share)."""
+    base = os.environ.get("XDG_DATA_HOME")
+    data = Path(base) if base else (home or Path.home()) / ".local" / "share"
+    return (data / "applications" / "pwvault.desktop",
+            data / "icons" / "hicolor" / "scalable" / "apps" / "pwvault.svg")
+
+
+def _write_text(path: Path, text: str) -> None:
+    """Replace path atomically, readable by all users; desktop environments read these files."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}-")
+    try:
+        os.fchmod(fd, 0o644)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def install_launcher(home: Path | None = None) -> list[Path]:
+    """Add pwvault to the app menu for this user. Exec is the absolute path to pwvault-gui when it
+    is on PATH, so the menu works with the desktop's minimal PATH."""
+    desktop, icon = launcher_paths(home)
+    exe = shutil.which("pwvault-gui") or "pwvault-gui"
+    if " " in exe:
+        exe = f'"{exe}"'
+    _write_text(icon, ICON_SVG)
+    _write_text(desktop, DESKTOP_ENTRY.format(exec=exe))
+    return [desktop, icon]
+
+
+def uninstall_launcher(home: Path | None = None) -> list[Path]:
+    """Remove pwvault's two launcher files, and only those. Returns the paths removed."""
+    removed = []
+    for path in launcher_paths(home):
+        if path.exists():
+            path.unlink()
+            removed.append(path)
+    return removed
+
+
 def main():
     os.umask(0o077)
+    if sys.argv[1:2] == ["--install-launcher"]:
+        for path in install_launcher():
+            print(f"Wrote {path}")
+        return
+    if sys.argv[1:2] == ["--uninstall-launcher"]:
+        removed = uninstall_launcher()
+        for path in removed:
+            print(f"Removed {path}")
+        if not removed:
+            print("Nothing to remove.")
+        return
     path = Path(sys.argv[1]) if len(sys.argv) > 1 else pwvault.DEFAULT_VAULT
     App(path).run()
 

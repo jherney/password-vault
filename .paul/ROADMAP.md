@@ -14,7 +14,7 @@ Take pwvault from 1.2.0 to a hardened, distributable release: fix remaining edge
 
 **v1.3 Hardening, TOTP, Backups & Release** (v1.3.0)
 Status: In progress
-Phases: 3 of 5 complete (60%)
+Phases: 4 of 5 complete (80%)
 
 ## Phases
 
@@ -23,8 +23,8 @@ Phases: 3 of 5 complete (60%)
 | 1 | Safe saves & backups | 1/1 | ✅ Complete | 2026-10-30 |
 | 2 | TOTP codes | 1/1 | ✅ Complete | 2026-10-30 |
 | 3 | GUI polish | 1/1 | ✅ Complete | 2026-10-30 |
-| 4 | Security review & hardening | 1/3 | In progress | - |
-| 5 | Packaging & release | TBD | Not started | - |
+| 4 | Security review & hardening | 2/3 (04-02 not needed) | ✅ Complete | 2026-10-30 |
+| 5 | Packaging & release | 2/3 | In progress | - |
 
 ## Phase Details
 
@@ -86,10 +86,17 @@ Phases: 3 of 5 complete (60%)
 
 **Plans:**
 - [x] 04-01: Security audit (findings, threat model, data classification); re-key purge made crash-safe (F-01); key file ignored by git
-- [ ] 04-02: Fixes for any further findings (none needed so far; decide before planning)
-- [ ] 04-03: QA pass on CLI and GUI with regression tests (to be planned)
+- [-] 04-02: not needed (no open high or medium findings)
+- [x] 04-03: QA pass on CLI and GUI; 4 defects fixed incl. trash restore to original group
 
 ### Phase 5: Packaging & release
+
+**Plans:**
+- [x] 05-01: Release readiness: hash-pinned lock file (F-15), version 1.3.0, changelog, drift test
+- [x] 05-02: Desktop launcher: per-user .desktop entry and icon via `pwvault-gui --install-launcher`
+- [ ] 05-03: PyPI release: trusted-publishing workflow written; name `pwvault-manager` (chosen); build and clean install verified. Waiting on: PyPI trusted publisher (manual), your approval to tag v1.3.0 (depends on 05-01)
+
+**Decided:** distribution name `pwvault-manager` (`pwvault` and `passguard` are taken on PyPI).
 
 **Goal:** `pip install pwvault` from PyPI; GUI in the desktop app menu; v1.3.0 tagged
 **Depends on:** Phase 4
@@ -102,4 +109,4 @@ Phases: 3 of 5 complete (60%)
 
 ---
 *Roadmap created: 2026-10-30*
-*Last updated: 2026-10-30 after Phase 3 unify*
+*Last updated: 2026-10-30 after Phase 5 plan*

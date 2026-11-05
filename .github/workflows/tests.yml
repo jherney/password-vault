@@ -28,7 +28,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          python -m pip install --require-hashes -r requirements.lock
       - name: Run tests (GUI tests under Xvfb)
         run: xvfb-run -a python -m unittest discover -s tests -v
       - name: Package builds and installs

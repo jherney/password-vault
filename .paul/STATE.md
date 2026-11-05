@@ -11,14 +11,14 @@ about: "pwvault"
 See: .paul/PROJECT.md (updated 2026-10-30)
 
 **Core value:** I can keep all my passwords in one encrypted local vault that I control, use it from the terminal or a GUI, and still open it in KeePass-compatible apps.
-**Current focus:** v1.3 — Phase 4 Security review & hardening (plan 04-01 and 04-03 complete; 04-02 not needed)
+**Current focus:** v1.3 — Phase 5 Packaging & release (05-01, 05-02 applied; 05-03 waits for PyPI setup and tag approval)
 
 ## Current Position
 
 Milestone: v1.3 Hardening, TOTP, Backups & Release
-Phase: 4 of 5 (Security review & hardening) — In progress
-Plan: 04-03 complete (QA pass, 4 defects fixed incl. trash restore to original group); 04-02 not needed
-Status: 04-03 applied; next is Phase 5 planning
+Phase: 5 of 5 (Packaging & release) — Planning
+Plan: 05-01 and 05-02 applied; 05-03 applied up to human checkpoints (name `pwvault-manager`, publish workflow, verified build)
+Status: waiting on the PyPI trusted publisher and approval to tag v1.3.0
 Last activity: 2026-10-30 — Unified 04-01: F-01 fixed; findings, threat model and data classification written; full suite 156 OK after 04-03
 
 Progress:
@@ -26,7 +26,8 @@ Progress:
 - Phase 1: [██████████] 100% ✓
 - Phase 2: [██████████] 100% ✓
 - Phase 3: [██████████] 100% ✓
-- Phase 4: [██████░░░░] 67% (plans 04-01 and 04-03 complete; 04-02 not needed)
+- Phase 4: [██████████] 100% ✓ (04-02 not needed)
+- Phase 5: [████████░░] 85% (05-03 at human checkpoints)
 
 ## Loop Position
 
@@ -76,9 +77,9 @@ Uncommitted: `.gstack/` and `pwvault.keyx` (both intentionally not committed)
 ## Session Continuity
 
 Last session: 2026-10-30
-Stopped at: Plan 04-03 complete
-Next action: Phase 4 closed; plan Phase 5 with /paul:plan
-Resume file: .paul/phases/04-security-review/04-01-SUMMARY.md
+Stopped at: 05-01 and 05-02 applied
+Next action: create the PyPI trusted publisher for pwvault-manager (publish.yml, environment pypi), then approve the v1.3.0 tag
+Resume file: .paul/phases/05-packaging-release/05-03-PLAN.md
 
 ---
 *STATE.md — Updated after every significant action*
