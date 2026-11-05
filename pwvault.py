@@ -296,6 +296,11 @@ def yubikey_challenge_block(challenge: bytes) -> bytes:
     return challenge + bytes([pad]) * pad
 
 
+def yubikey_touch_prompt() -> None:
+    """Shown once when the YubiKey waits for a touch. The GUI points this at its own status text."""
+    print("Touch your YubiKey…", file=sys.stderr, flush=True)
+
+
 def challenge_response(yubikey: YubiKeySlot, challenge: bytes) -> bytes:
     """Ask a plugged-in YubiKey for the HMAC-SHA1 response to challenge, through yubikey-manager
     (an optional dependency, imported only here)."""
@@ -321,7 +326,7 @@ def challenge_response(yubikey: YubiKeySlot, challenge: bytes) -> bytes:
     def keepalive(_status):
         if not prompted:
             prompted.append(True)
-            print("Touch your YubiKey…", file=sys.stderr, flush=True)
+            yubikey_touch_prompt()
     try:
         with device.open_connection(OtpConnection) as conn:
             session = YubiOtpSession(conn)

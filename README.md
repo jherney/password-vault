@@ -165,7 +165,7 @@ python3 pwvault.py --yubikey 2 passwd --no-yubikey   # or remove it
 
 **Keep a spare.** The secret in the YubiKey slot is part of the key and pwvault never stores it. If the key is lost or broken, the vault can't be opened. Program a second YubiKey with the same secret (`ykman otp chalresp 2 <secret>`), or keep the secret somewhere safe offline.
 
-The GUI can't open YubiKey vaults yet; that comes next.
+In the GUI, choose the slot under **YubiKey** on the unlock screen (it is remembered for that vault; settings.ini keeps only a hash of the vault's path and the slot number), in Database > Change master key… to add, change or remove it, and in Database > Merge another copy… for the other copy. While the key waits for a touch, the window shows "Touch your YubiKey…".
 
 ## Security model
 
