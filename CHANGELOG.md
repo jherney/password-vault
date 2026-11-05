@@ -9,6 +9,7 @@ All notable changes to pwvault. The format follows [Keep a Changelog](https://ke
 - YubiKey HMAC-SHA1 challenge-response as part of the master key, KeePassXC-compatible: `--yubikey SLOT[:SERIAL]` on every command, `passwd --new-yubikey/--no-yubikey`, `merge --other-yubikey`. Needs the optional `[yubikey]` extra (yubikey-manager).
 - GUI: YubiKey choice on the unlock and create screens (remembered per vault), in Change master key and in Merge another copy; "Touch your YubiKey…" while it waits.
 - GUI: Database > Merge another copy… shows every change from the other copy, then saves the merge (with a backup) or discards it.
+- `pwvault check` lists entries whose passwords are breached, reused or weak, entirely offline. Breaches come from a local copy of Have I Been Pwned's Pwned Passwords list: `pwvault breach update` downloads it (resumable, stored compactly in `~/.cache/pwvault/pwned/`), `breach import FILE` builds it from an existing hash file, `breach status` shows it.
 
 ### Changed
 - GUI error messages keep their capitals (file paths and names like YubiKey were shown lowercased).

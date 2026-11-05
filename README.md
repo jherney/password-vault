@@ -18,6 +18,7 @@ A small, local password manager. Your vault is a standard KeePass (`.kdbx`) file
 - TOTP (2FA) codes, stored KeePassXC-compatibly (see [TOTP codes](#totp-2fa-codes))
 - Optional YubiKey challenge-response as part of the master key, compatible with KeePassXC (see [YubiKey](#yubikey))
 - Merge two copies of a vault edited on different devices (see [Using the vault on two devices](#using-the-vault-on-two-devices))
+- Offline check for breached, reused and weak passwords (see [Checking for breached passwords](#checking-for-breached-passwords))
 
 ## Requirements
 
@@ -63,6 +64,8 @@ The default vault is `~/.local/share/pwvault/vault.kdbx`. Override it with `--va
 | `remove QUERY` | Move an entry to the recycle bin |
 | `trash {list,restore,empty} [QUERY]` | Work with the recycle bin |
 | `generate [-l LEN] [--no-symbols] [--no-lookalikes] [--show]` | Generate a password without saving it |
+| `check` | List entries whose passwords are breached, reused or weak, without using the network (see [Checking for breached passwords](#checking-for-breached-passwords)) |
+| `breach {update,import,status} [FILE]` | Download, import or show the offline breach list `check` uses |
 | `passwd [--new-keyfile PATH] [--no-keyfile] [--new-yubikey SLOT \| --no-yubikey]` | Change the master password, key file and/or YubiKey |
 | `backup {list,restore} [N]` | List the automatic backups, or restore backup `N` (see [Backups](#backups)) |
 | `keyfile PATH` | Create a random key file |
@@ -166,6 +169,25 @@ python3 pwvault.py --yubikey 2 passwd --no-yubikey   # or remove it
 **Keep a spare.** The secret in the YubiKey slot is part of the key and pwvault never stores it. If the key is lost or broken, the vault can't be opened. Program a second YubiKey with the same secret (`ykman otp chalresp 2 <secret>`), or keep the secret somewhere safe offline.
 
 In the GUI, choose the slot under **YubiKey** on the unlock screen (it is remembered for that vault; settings.ini keeps only a hash of the vault's path and the slot number), in Database > Change master key… to add, change or remove it, and in Database > Merge another copy… for the other copy. While the key waits for a touch, the window shows "Touch your YubiKey…".
+
+## Checking for breached passwords
+
+`pwvault check` lists the entries whose password is in a known data breach, is used by more than one entry, or is weak (under 50 bits by the generator's estimate). It never prints a password, skips the recycle bin and entries with no password, and works entirely offline.
+
+Breached passwords are looked up in a local copy of Have I Been Pwned's [Pwned Passwords](https://haveibeenpwned.com/Passwords) list, which you download once:
+
+```bash
+python3 pwvault.py breach update    # ~1 million requests, ~55 GB downloaded, a few hours; needs 20 GB free
+python3 pwvault.py breach status    # how many hashes, and when the list was downloaded
+python3 pwvault.py check
+```
+
+- **Nothing about your passwords is sent.** `breach update` downloads every one of the list's 1,048,576 ranges, the same for everyone, and `check` makes no network connections at all.
+- **Size.** The list is stored compactly in `~/.cache/pwvault/pwned/` (or `$XDG_CACHE_HOME/pwvault/pwned/`), outside the vault's folder: about 16 GB for the ~2.6 billion hashes, keeping the first 68 bits of each SHA-1 hash. A false "breached" result is about 1 in 100 billion per password. How often a password was seen is not kept.
+- **Interrupted downloads resume.** Press Ctrl+C or lose the connection and run `breach update` again; it continues from the last finished batch. A damaged or unexpected response is retried and never stored. While an update runs, `check` keeps using the previous complete list.
+- **Already have the list?** `breach import FILE` builds the store from a `HASH:COUNT` text file sorted by hash, such as the output of HIBP's [PwnedPasswordsDownloader](https://github.com/HaveIBeenPwned/PwnedPasswordsDownloader).
+
+Without a downloaded list, `check` still reports reused and weak passwords and says how to get the list.
 
 ## Security model
 

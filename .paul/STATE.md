@@ -16,22 +16,22 @@ See: .paul/PROJECT.md (updated 2026-11-05)
 ## Current Position
 
 Milestone: v1.4 Daily-driver gaps
-Phase: 8 of 6–9 (Offline breach check)
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-11-05 — Phase 7 complete (07-01, 07-02; /cso no supported findings), transitioned to Phase 8
+Phase: 8 of 6–9 (Offline breach check) — In progress (1 of 2 plans)
+Plan: 08-01 complete (AC-5 deferred); 08-02 not yet planned
+Status: Loop closed, ready for next PLAN
+Last activity: 2026-11-05 — Unified 08-01 (.paul/phases/08-breach-check/08-01-SUMMARY.md)
 
 Progress:
 - v1.3 Hardening, TOTP, Backups & Release: [██████████] 100% ✓ (released 2026-11-05)
 - v1.4 Daily-driver gaps: [█████░░░░░] 50% (Phases 6–7 ✓)
-- Phase 8: [░░░░░░░░░░] 0%
+- Phase 8: [█████░░░░░] 50% (08-01 ✓)
 
 ## Loop Position
 
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ○        ○        ○     [Ready for first PLAN of Phase 8]
+  ✓        ✓        ✓     [Loop complete - ready for next PLAN]
 ```
 
 ## Accumulated Context
@@ -52,6 +52,8 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | 2026-11-05: Phase 7 work goes through PR #6 (branch yubikey-gui) so CodeRabbit reviews it; its one finding fixed in 0579ff2 | Phase 7 | PR workflow available for later phases |
 | 2026-11-05: No YubiKey available (user, at 07-01 APPLY); the real-hardware checkpoint (AC-5) is deferred. KeePassXC compatibility is covered offline by KeePassXC's own YubiKey test vault and known answer; driver calls checked against yubikey-manager 5.9.2 source | Phase 7 | Driver never run against a device; first real-key use is the open item |
 | 2026-11-05: GUI merge changes the vault in memory; Save writes once, Discard/Escape/close reload from disk (no password prompt); lock drops it | Phase 6 | Pattern for later in-memory-then-confirm dialogs |
+| 2026-11-05: Phase 8 in two plans (08-01 store + CLI, 08-02 GUI); breach store keeps 6-byte hash suffixes, no counts (~16 GB for ~2.6 billion hashes) | Phase 8 | Reports "found in breaches" only; ~1 in 10^11 false-match odds |
+| 2026-11-05: Breach list lives in `$XDG_CACHE_HOME/pwvault/pwned` (re-downloadable), made live by an atomic `current` symlink swap; 08-01 AC-5 (real download) deferred by the user | Phase 8 | 08-02 reuses `check_vault()`; first real download is an open item |
 | 2026-11-05: Every move stamps LocationChanged and every permanent delete writes DeletedObjects (pykeepass does neither) | Phase 6 | Moves and deletions made in pwvault carry over in merges here and in KeePassXC; deletions made with 1.3 or earlier were not recorded |
 
 ### Deferred Issues
@@ -62,11 +64,13 @@ PLAN ──▶ APPLY ──▶ UNIFY
 - Phase 3: Backups restore locks the vault rather than reloading in place (approved as-is)
 - Phase 3: a stray untracked `pwvault.keyx` (32 bytes) appeared in the repo root during a test run at 21:51; source not identified (not reproduced in a later full run); `*.keyx` is now git-ignored
 - Phase 7 (07-01): AC-5 real-YubiKey check with keepassxc-cli -y; `[yubikey]` extra needs pcsc-lite-devel to build pyscard
+- Phase 8 (08-01): AC-5 real `pwvault breach update` against the HIBP API (with a Ctrl+C and resume), `breach status`, and `check` on the real vault
 - Phase 6 (06-01): deletions made with pwvault ≤ 1.3 not recorded (reappear on first merge); Meta HistoryMaxItems/HistoryMaxSize not read; database CustomData not merged (revisit in Phase 9); KDBX3↔4 time re-encoding untested
 - Phase 4 (04-01): F-15 no lock file for dependencies; deferred to Phase 5 before any publish workflow. CI pins (F-11) and dependency minimums (F-12, F-14) fixed after the second CSO run
 
 ### Blockers/Concerns
 
+- Phase 8: breach downloader never run against the real HIBP API (08-01 AC-5 deferred)
 - Phase 7: YubiKey driver untested on hardware (no key available); AC-5 of 07-01 open until a key is used once with keepassxc-cli
 - Phase 1: ~~backups not opened in real KeePassXC~~ resolved 2026-10-30: a backup opens in keepassxc-cli 2.8.0 with correct TOTP.
 - Phase 1: after a re-key, only the purge keeps old-key backups from lingering; revisit in Phase 4's security review.
@@ -74,34 +78,15 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 ### Git State
 
-Last commit: 0a11adb (07-01 YubiKey CLI), pushed
-<!-- coderabbit-ai-generated:v1 -->
-
-<!-- coderabbit-ai-generated-section:v1:e9841dda2a74550f73982fab75c1c307505f91cc398034a64406db51443f9494 -->
-
-Branch: yubikey-gui (PR #6 merged; PR #7 open with follow-up fixes not yet on main); PR #6 merged as 54901f7
-
-<!-- /coderabbit-ai-generated:v1 -->
+Last commit: 9fb30f8 (08-01 breach check) on branch breach-check, pushed; PR #8 into main open
 Uncommitted: `.gstack/` and `pwvault.keyx` (both intentionally not committed)
 
 ## Session Continuity
 
 Last session: 2026-11-05
-<!-- coderabbit-ai-generated:v1 -->
-
-<!-- coderabbit-ai-generated-section:v1:8908c822008441c828418c401ec0a8d6656eb03402883b28811b37243487860f -->
-
-Stopped at: Phase 7 complete; PR #6 merged, PR #7 follow-up fixes pending on main
-
-<!-- /coderabbit-ai-generated:v1 -->
-<!-- coderabbit-ai-generated:v1 -->
-
-<!-- coderabbit-ai-generated-section:v1:abeec1f78900df88ce5ef101ef7623cc8715e4e1b2503384267878bcde1a04d9 -->
-
-Next action: incorporate PR #7 into main, then /paul:plan for Phase 8 (Offline breach check)
-
-<!-- /coderabbit-ai-generated:v1 -->
-Resume file: .paul/ROADMAP.md
+Stopped at: 08-01 unified (loop closed)
+Next action: /paul:plan for 08-02 (GUI report dialog + phase /cso)
+Resume file: .paul/phases/08-breach-check/08-01-SUMMARY.md
 
 ---
 *STATE.md — Updated after every significant action*
