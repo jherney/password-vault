@@ -304,21 +304,27 @@ class DownloadTests(SmallRanges):
         self.assertEqual(self.store_files(), expected)
 
 
+def make_check_vault(tmp: Path) -> Path:
+    """A vault with one entry for each case a check must tell apart (also used by the GUI tests):
+    breached, reused twice (one in a subgroup), weak, strong, empty, and breached in the recycle bin."""
+    path = tmp / "vault.kdbx"
+    v = Vault.create(path, PW)
+    work = v.add_group(v.root, "Work")
+    v.add_entry(v.root, "Leaked site", "me", BREACHED, "https://leaked.example")
+    v.add_entry(work, "Mail", "me@work", SHARED)
+    v.add_entry(v.root, "Forum", "me", SHARED)
+    v.add_entry(v.root, "Router", "admin", WEAK)
+    v.add_entry(v.root, "Bank", "me", pwvault.generate_password(24))
+    v.add_entry(v.root, "Bookmark", "", "")
+    old = v.add_entry(v.root, "Old leaked", "me", BREACHED + "-old")
+    v.delete_entry(old)
+    v.save()
+    return path
+
+
 class CheckTests(BreachBase):
     def make_vault(self):
-        path = self.tmp / "vault.kdbx"
-        v = Vault.create(path, PW)
-        work = v.add_group(v.root, "Work")
-        v.add_entry(v.root, "Leaked site", "me", BREACHED, "https://leaked.example")
-        v.add_entry(work, "Mail", "me@work", SHARED)
-        v.add_entry(v.root, "Forum", "me", SHARED)
-        v.add_entry(v.root, "Router", "admin", WEAK)
-        v.add_entry(v.root, "Bank", "me", pwvault.generate_password(24))
-        v.add_entry(v.root, "Bookmark", "", "")
-        old = v.add_entry(v.root, "Old leaked", "me", BREACHED + "-old")
-        v.delete_entry(old)
-        v.save()
-        return path
+        return make_check_vault(self.tmp)
 
     def test_check_vault_findings(self):
         path = self.make_vault()

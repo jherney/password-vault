@@ -189,6 +189,8 @@ python3 pwvault.py check
 
 Without a downloaded list, `check` still reports reused and weak passwords and says how to get the list.
 
+In the GUI, Database > Check passwords… shows the same report. Double-click an entry (or select it and press Show entry) to close the report and jump to that entry in the main window; open the report again after changing passwords to re-check.
+
 ## Security model
 
 - The vault is written atomically with file mode `0600`. If the vault path is a symlink (for example into a synced folder), the file it points to is updated and the link is kept.
