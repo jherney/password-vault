@@ -27,7 +27,7 @@ Constraints for every phase:
 |-------|------|-------|--------|-----------|
 | 6 | Vault merge | 2/2 | ✅ Complete | 2026-11-05 |
 | 7 | YubiKey unlock | 2/2 | ✅ Complete | 2026-11-05 |
-| 8 | Offline breach check | 1/2 | In progress | - |
+| 8 | Offline breach check | 2/3 | In progress | - |
 | 9 | Browser autofill | TBD | Not started | - |
 
 ## Phase Details
@@ -82,7 +82,8 @@ Constraints for every phase:
 
 **Plans:**
 - [x] 08-01 (AC-5 real download deferred): compact HIBP store (download with resume, import, lookup), `pwvault check` (breached, reused, weak), `pwvault breach update|import|status`
-- [ ] 08-02: GUI report dialog that opens flagged entries; phase `/cso`
+- [x] 08-02: GUI Database > Check passwords… report; double-click selects the entry in the main window
+- [ ] 08-03: phase `/cso` on 08-01 and 08-02
 
 ### Phase 9: Browser autofill
 
