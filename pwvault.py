@@ -21,16 +21,21 @@ export to CSV, HTML, XML and TXT, and a configurable password generator.
 
 import argparse
 import base64
+import bisect
+import concurrent.futures
 import csv
 import fcntl
 import getpass
+import gzip
 import hashlib
 import hmac
 import html
 import io
+import itertools
 import json
 import math
 import os
+import re
 import secrets
 import shutil
 import stat
@@ -42,7 +47,9 @@ import tempfile
 import threading
 import time
 import urllib.parse
+import urllib.request
 import uuid
+import zlib
 import copy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -1539,6 +1546,319 @@ def migrate_legacy(old: Path, new: Path, password: str, keyfile=None) -> Vault:
     return vault
 
 
+# ---------------------------------------------------------------- offline breach check
+#
+# Have I Been Pwned's Pwned Passwords list, kept on this machine so a check sends nothing anywhere.
+# HIBP publishes it only as 16^5 range files (api.pwnedpasswords.com/range/XXXXX), one per 5-hex
+# SHA-1 prefix; downloading every range reveals nothing about any password. The store keeps, for
+# each range in order, the next PWNED_RECORD bytes of each hash, sorted, plus an index of where
+# each range starts. That is 68 bits per hash, so a false match is about N / 2^68 per password
+# (around 1 in 10^11 for the ~2.6 billion hashes HIBP had in 2026). Counts are not kept.
+#
+# Layout under breach_dir(): store-<stamp>/{hashes.bin,index.bin,meta.json}, a "current" symlink
+# to the live one, and partial/ while a build runs. A finished build is renamed and the symlink
+# swapped in one step, so a check never sees half a store.
+
+PWNED_API = "https://api.pwnedpasswords.com/range/"
+PWNED_RANGES = 1 << 20  # 16^5 prefixes
+PWNED_RECORD = 6  # bytes kept per hash after the 5-hex prefix
+PWNED_BATCH = 4096  # ranges fetched, written and fsynced together; a resume restarts here
+PWNED_WORKERS = 16
+PWNED_TRIES = 5
+PWNED_MIN_FREE = 20 << 30  # the full list is ~16 GB in this format (~2,500 hashes per range)
+PWNED_FORMAT = 1
+_PWNED_RANGE_LINE = re.compile(rb"([0-9A-F]{35}):(\d+)")
+_PWNED_FILE_LINE = re.compile(rb"([0-9A-F]{40}):(\d+)")
+
+
+def breach_dir() -> Path:
+    """Where the breach list lives: the cache directory, never the vault's folder, since it is
+    large and can always be downloaded again."""
+    base = os.environ.get("XDG_CACHE_HOME")
+    return (Path(base) if base else Path.home() / ".cache") / "pwvault" / "pwned"
+
+
+def parse_range(body: bytes, prefix: str) -> bytes:
+    """The store records for one range from its 'SUFFIX:COUNT' lines, sorted."""
+    suffixes = []
+    for line in body.split(b"\n"):
+        line = line.strip()
+        if not line:
+            continue
+        m = _PWNED_RANGE_LINE.fullmatch(line)
+        if not m:
+            raise VaultError(f"range {prefix} has malformed data")
+        if int(m[2]):  # padding lines have a count of 0
+            suffixes.append(m[1])
+    suffixes.sort()
+    if any(a == b for a, b in zip(suffixes, suffixes[1:])):
+        raise VaultError(f"range {prefix} lists a hash twice")
+    return b"".join(base64.b16decode(h[:2 * PWNED_RECORD]) for h in suffixes)
+
+
+def fetch_range(prefix: str) -> bytes:
+    """One range from the HIBP API, gzip-compressed in transit (about half the size)."""
+    req = urllib.request.Request(PWNED_API + prefix, headers={
+        "User-Agent": f"pwvault-manager/{__version__}", "Accept-Encoding": "gzip"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        body, encoding = r.read(), r.headers.get("Content-Encoding", "")
+    if encoding == "gzip":
+        try:
+            return gzip.decompress(body)
+        except (OSError, EOFError, zlib.error):
+            raise VaultError(f"range {prefix} arrived damaged")
+    return body
+
+
+def _fetch_checked(prefix: str, fetch) -> bytes:
+    err = None
+    for attempt in range(PWNED_TRIES):
+        try:
+            records = parse_range(fetch(prefix), prefix)
+            if not records:  # every real range holds hundreds of hashes
+                raise VaultError(f"range {prefix} came back empty")
+            return records
+        except (OSError, VaultError) as e:  # urllib's errors are OSErrors
+            err = e
+            if attempt < PWNED_TRIES - 1:
+                time.sleep(min(2 ** attempt, 30))
+    raise VaultError(f"couldn't download range {prefix} after {PWNED_TRIES} tries ({err})")
+
+
+class _BreachBuild:
+    """partial/ under construction: hashes.bin grows range by range and index.bin holds the
+    offsets of the ranges finished so far, so its length is the resume point."""
+
+    def __init__(self, root: Path, fresh: bool):
+        self.root, self.dir = root, root / "partial"
+        if fresh and self.dir.exists():
+            shutil.rmtree(self.dir)
+        self.dir.mkdir(parents=True, exist_ok=True)
+        hashes, index = self.dir / "hashes.bin", self.dir / "index.bin"
+        offsets = index.read_bytes() if index.exists() else b""
+        offsets = offsets[:len(offsets) // 8 * 8] or struct.pack("<Q", 0)
+        if len(offsets) // 8 - 1 > PWNED_RANGES:
+            offsets = struct.pack("<Q", 0)
+        self.done = len(offsets) // 8 - 1
+        self.total = struct.unpack_from("<Q", offsets, len(offsets) - 8)[0]
+        for path in (hashes, index):
+            path.touch()
+        self._hashes, self._index = open(hashes, "r+b"), open(index, "r+b")
+        # Anything past the last recorded offset came from a batch that didn't finish.
+        self._hashes.truncate(self.total * PWNED_RECORD)
+        self._hashes.seek(0, os.SEEK_END)
+        self._index.truncate(len(offsets))
+        self._index.seek(0)
+        self._index.write(offsets)
+
+    @property
+    def size(self) -> int:
+        return self.total * PWNED_RECORD
+
+    def append(self, ranges) -> None:
+        """Add the next ranges' records, then make them durable before recording them done."""
+        offsets = []
+        for records in ranges:
+            self._hashes.write(records)
+            self.total += len(records) // PWNED_RECORD
+            offsets.append(self.total)
+        self._hashes.flush()
+        os.fsync(self._hashes.fileno())
+        self._index.write(struct.pack(f"<{len(offsets)}Q", *offsets))
+        self._index.flush()
+        os.fsync(self._index.fileno())
+        self.done += len(offsets)
+
+    def finish(self, source: str) -> int:
+        if self.done != PWNED_RANGES:
+            raise VaultError(f"breach list incomplete ({self.done} of {PWNED_RANGES} ranges)")
+        self.close()
+        meta = {"format": PWNED_FORMAT, "source": source, "hashes": self.total,
+                "completed": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+        with open(self.dir / "meta.json", "w") as f:
+            json.dump(meta, f)
+            f.flush()
+            os.fsync(f.fileno())
+        store = self.root / f"store-{datetime.now(timezone.utc).strftime(BACKUP_STAMP)}"
+        os.rename(self.dir, store)
+        self._make_current(store)
+        for old in self.root.glob("store-*"):
+            if old != store:
+                shutil.rmtree(old, ignore_errors=True)
+        return self.total
+
+    def _make_current(self, store: Path) -> None:
+        """Point the "current" symlink at store in one atomic, durable step."""
+        link = self.root / "current.new"
+        if link.is_symlink() or link.exists():
+            link.unlink()
+        link.symlink_to(store.name)
+        os.replace(link, self.root / "current")
+        fd = os.open(self.root, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+    def close(self) -> None:
+        self._hashes.close()
+        self._index.close()
+
+
+def _check_free_space(root: Path, already: int) -> None:
+    free = shutil.disk_usage(root).free
+    if free + already < PWNED_MIN_FREE:
+        need = (PWNED_MIN_FREE - already) / (1 << 30)
+        raise VaultError(f"the breach list needs about {need:.0f} GB free in {root} "
+                         f"({free / (1 << 30):.1f} GB free)")
+
+
+def update_breach_list(fetch=None, progress=None) -> int:
+    """Download the whole list from HIBP, resuming an interrupted download. Returns the hash count."""
+    fetch = fetch or fetch_range
+    root = breach_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    build = _BreachBuild(root, fresh=False)
+    try:
+        _check_free_space(root, build.size)
+        pool = concurrent.futures.ThreadPoolExecutor(PWNED_WORKERS)
+        try:
+            for start in range(build.done, PWNED_RANGES, PWNED_BATCH):
+                prefixes = [f"{r:05X}" for r in range(start, min(start + PWNED_BATCH, PWNED_RANGES))]
+                build.append(pool.map(lambda p: _fetch_checked(p, fetch), prefixes))
+                if progress:
+                    progress(build.done, PWNED_RANGES)
+        except BaseException:
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
+        pool.shutdown()
+        return build.finish(PWNED_API)
+    finally:
+        build.close()
+
+
+def import_breach_list(path: Path, progress=None) -> int:
+    """Build the store from a 'HASH:COUNT' text file sorted by hash (the output of HIBP's
+    PwnedPasswordsDownloader), read line by line. Returns the hash count."""
+    root = breach_dir()
+    root.mkdir(parents=True, exist_ok=True)
+
+    def ranges():
+        current, records, last = 0, [], b""
+        with open(path, "rb") as f:
+            for n, line in enumerate(f, 1):
+                line = line.strip().upper()
+                if not line:
+                    continue
+                m = _PWNED_FILE_LINE.fullmatch(line)
+                if not m or m[1] <= last:
+                    raise VaultError(f"{path}: line {n} is not a HASH:COUNT line in hash order")
+                last = m[1]
+                r = int(m[1][:5], 16)
+                while current < r:
+                    yield b"".join(records)
+                    records, current = [], current + 1
+                if int(m[2]):
+                    records.append(base64.b16decode(m[1][5:5 + 2 * PWNED_RECORD]))
+        while current < PWNED_RANGES:
+            yield b"".join(records)
+            records, current = [], current + 1
+
+    build = _BreachBuild(root, fresh=True)
+    try:
+        _check_free_space(root, 0)
+        it = ranges()
+        for _ in range(0, PWNED_RANGES, PWNED_BATCH):
+            build.append(itertools.islice(it, PWNED_BATCH))
+            if progress:
+                progress(build.done, PWNED_RANGES)
+        return build.finish(f"file {Path(path).name}")
+    finally:
+        build.close()
+
+
+class BreachStore:
+    """The live breach list, read in place: a lookup reads two index entries and one range."""
+
+    DAMAGED = "the breach list is damaged — run `pwvault breach update`"
+
+    def __init__(self, root: Path | None = None):
+        root = root or breach_dir()
+        if not (root / "current").exists():
+            raise VaultError("no breach list yet — run `pwvault breach update`")
+        store = Path(os.path.realpath(root / "current"))  # resolve once: a later swap can't mix stores
+        try:
+            self.meta = json.loads((store / "meta.json").read_text())
+            self._hashes = os.open(store / "hashes.bin", os.O_RDONLY)
+            self._index = os.open(store / "index.bin", os.O_RDONLY)
+        except (OSError, ValueError):
+            self.close()
+            raise VaultError(self.DAMAGED)
+        if (not isinstance(self.meta, dict) or self.meta.get("format") != PWNED_FORMAT
+                or os.fstat(self._index).st_size != (PWNED_RANGES + 1) * 8
+                or os.fstat(self._hashes).st_size != self.meta.get("hashes", -1) * PWNED_RECORD):
+            self.close()
+            raise VaultError(self.DAMAGED)
+
+    def contains(self, password: str) -> bool:
+        digest = hashlib.sha1(password.encode()).digest()  # HIBP hashes the UTF-8 password
+        bits = int.from_bytes(digest[:9], "big") >> 4  # the top 68 bits
+        r = bits >> (8 * PWNED_RECORD)
+        key = (bits & ((1 << (8 * PWNED_RECORD)) - 1)).to_bytes(PWNED_RECORD, "big")
+        lo, hi = struct.unpack("<QQ", os.pread(self._index, 16, r * 8))
+        data = os.pread(self._hashes, (hi - lo) * PWNED_RECORD, lo * PWNED_RECORD)
+        def record_at(i):
+            return data[i * PWNED_RECORD:(i + 1) * PWNED_RECORD]
+        count = len(data) // PWNED_RECORD
+        i = bisect.bisect_left(range(count), key, key=record_at)
+        return i < count and record_at(i) == key
+
+    def close(self) -> None:
+        for fd in (getattr(self, "_hashes", None), getattr(self, "_index", None)):
+            if fd is not None:
+                os.close(fd)
+        self._hashes = self._index = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+
+@dataclass
+class Finding:
+    entry: object
+    issues: list  # of "breached", "reused", "weak"
+    reused_with: list = field(default_factory=list)
+
+
+def checked_entries(vault) -> list:
+    """Entries a check looks at: not in the recycle bin, with a password."""
+    return [e for e in vault.kp.entries if e.password and not vault.in_recycle_bin(e)]
+
+
+def check_vault(vault, store: BreachStore | None = None) -> list:
+    """Entries whose password is breached (when a store is given), reused or weak, in entry order."""
+    entries = checked_entries(vault)
+    by_password = {}
+    for e in entries:
+        by_password.setdefault(e.password, []).append(e)
+    findings = []
+    for e in entries:
+        others = [o for o in by_password[e.password] if o is not e]
+        issues = []
+        if store is not None and store.contains(e.password):
+            issues.append("breached")
+        if others:
+            issues.append("reused")
+        if strength(e.password)[1] == "weak":
+            issues.append("weak")
+        if issues:
+            findings.append(Finding(e, issues, others))
+    return findings
+
+
 # ---------------------------------------------------------------- CLI helpers
 
 def prompt_new_master(keyfile=None, yubikey=None) -> str:
@@ -1789,6 +2109,88 @@ def cmd_trash(args):
         print(f"Permanently deleted {n} item{'s' if n != 1 else ''}.")
 
 
+def cmd_check(args):
+    vault = unlock(args)
+    try:
+        store, note = BreachStore(), None
+    except VaultError as e:
+        store, note = None, str(e)
+    try:
+        findings = check_vault(vault, store)
+    finally:
+        if store:
+            store.close()
+    for f in findings:
+        _print_finding(vault, f)
+    count = {i: sum(i in f.issues for f in findings) for i in ("breached", "reused", "weak")}
+    checked = len(checked_entries(vault))
+    print(f"\n{len(findings)} of {checked} entr{'y' if checked == 1 else 'ies'} flagged"
+          + (f" ({count['breached']} breached, {count['reused']} reused, {count['weak']} weak)" if findings else ""))
+    if store is None:
+        print(f"Breached passwords not checked: {note}")
+
+
+def _print_finding(vault, finding) -> None:
+    e = finding.entry
+    print(f"{e.title or '(no title)'}  ({e.username or 'no username'})  in {vault.group_path(e.group)}")
+    line = "  " + ", ".join(finding.issues)
+    if finding.reused_with:
+        line += "; same password as: " + ", ".join(o.title or "(no title)" for o in finding.reused_with)
+    print(line)
+
+
+def _breach_progress():
+    """A progress callback that prints ranges done and time left on a terminal, else nothing."""
+    start = []
+
+    def show(done, total):
+        if not sys.stderr.isatty():
+            return
+        if not start:
+            start.extend((time.monotonic(), done))
+        rate = (done - start[1]) / max(time.monotonic() - start[0], 1e-9)
+        left = f", about {(total - done) / rate / 60:.0f} min left" if rate else ""
+        print(f"\r  {done:,} of {total:,} ranges{left}   ", end="" if done < total else "\n",
+              file=sys.stderr, flush=True)
+    return show
+
+
+def _print_breach_status() -> None:
+    try:
+        with BreachStore() as store:
+            m = store.meta
+            print(f"Breach list: {m['hashes']:,} password hashes, completed {m['completed']}\n"
+                  f"Stored in {breach_dir()}")
+    except VaultError as e:
+        print(e)
+    index = breach_dir() / "partial" / "index.bin"
+    if index.exists():
+        done = max(index.stat().st_size // 8 - 1, 0)
+        print(f"Unfinished download: {done:,} of {PWNED_RANGES:,} ranges — `pwvault breach update` resumes it")
+
+
+def cmd_breach(args):
+    if args.action == "status":
+        _print_breach_status()
+        return
+    if args.action == "import":
+        if not args.file:
+            sys.exit("error: `pwvault breach import` needs the hash list file")
+        n = import_breach_list(args.file, _breach_progress())
+    else:
+        if args.file:
+            sys.exit("error: `pwvault breach update` takes no file (use `breach import FILE`)")
+        print(f"Downloading the Pwned Passwords list from Have I Been Pwned into {breach_dir()}.\n"
+              "This is about 1 million requests (~55 GB downloaded, ~16 GB stored) and takes hours;\n"
+              "it can be stopped and resumed. Nothing about your passwords is sent.",
+              file=sys.stderr)
+        try:
+            n = update_breach_list(progress=_breach_progress())
+        except KeyboardInterrupt:
+            sys.exit("\nStopped. Run `pwvault breach update` again to continue where it left off.")
+    print(f"Breach list ready: {n:,} password hashes.")
+
+
 def cmd_generate(args):
     pw = generate_password(args.length, symbols=not args.no_symbols, exclude_lookalikes=args.no_lookalikes)
     bits, label = strength(pw)
@@ -1927,6 +2329,14 @@ def main():
     p.add_argument("--no-lookalikes", action="store_true", help="avoid characters like l, 1, O and 0")
     p.add_argument("--show", action="store_true")
     p.set_defaults(fn=cmd_generate)
+
+    p = sub.add_parser("check", help="list entries with breached, reused or weak passwords (offline)")
+    p.set_defaults(fn=cmd_check)
+
+    p = sub.add_parser("breach", help="download, import or show the offline breach list used by `check`")
+    p.add_argument("action", choices=("update", "import", "status"))
+    p.add_argument("file", type=Path, nargs="?", help="for import: a HASH:COUNT file sorted by hash")
+    p.set_defaults(fn=cmd_breach)
 
     p = sub.add_parser("passwd", help="change the master password and/or key file")
     p.add_argument("--new-keyfile", type=Path, metavar="PATH", help="create and require a new key file")

@@ -16,10 +16,10 @@ See: .paul/PROJECT.md (updated 2026-11-05)
 ## Current Position
 
 Milestone: v1.4 Daily-driver gaps
-Phase: 8 of 6–9 (Offline breach check)
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-11-05 — Phase 7 complete (07-01, 07-02; /cso no supported findings), transitioned to Phase 8
+Phase: 8 of 6–9 (Offline breach check) — Planning
+Plan: 08-01 created, awaiting approval
+Status: PLAN created, ready for APPLY
+Last activity: 2026-11-05 — Created .paul/phases/08-breach-check/08-01-PLAN.md
 
 Progress:
 - v1.3 Hardening, TOTP, Backups & Release: [██████████] 100% ✓ (released 2026-11-05)
@@ -31,7 +31,7 @@ Progress:
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ○        ○        ○     [Ready for first PLAN of Phase 8]
+  ✓        ○        ○     [Plan created, awaiting approval]
 ```
 
 ## Accumulated Context
@@ -52,6 +52,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | 2026-11-05: Phase 7 work goes through PR #6 (branch yubikey-gui) so CodeRabbit reviews it; its one finding fixed in 0579ff2 | Phase 7 | PR workflow available for later phases |
 | 2026-11-05: No YubiKey available (user, at 07-01 APPLY); the real-hardware checkpoint (AC-5) is deferred. KeePassXC compatibility is covered offline by KeePassXC's own YubiKey test vault and known answer; driver calls checked against yubikey-manager 5.9.2 source | Phase 7 | Driver never run against a device; first real-key use is the open item |
 | 2026-11-05: GUI merge changes the vault in memory; Save writes once, Discard/Escape/close reload from disk (no password prompt); lock drops it | Phase 6 | Pattern for later in-memory-then-confirm dialogs |
+| 2026-11-05: Phase 8 in two plans (08-01 store + CLI, 08-02 GUI); breach store keeps 6-byte hash suffixes, no counts (~6–12 GB) | Phase 8 | Reports "found in breaches" only; ~1 in 10^11 false-match odds |
 | 2026-11-05: Every move stamps LocationChanged and every permanent delete writes DeletedObjects (pykeepass does neither) | Phase 6 | Moves and deletions made in pwvault carry over in merges here and in KeePassXC; deletions made with 1.3 or earlier were not recorded |
 
 ### Deferred Issues
@@ -74,34 +75,15 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 ### Git State
 
-Last commit: 0a11adb (07-01 YubiKey CLI), pushed
-<!-- coderabbit-ai-generated:v1 -->
-
-<!-- coderabbit-ai-generated-section:v1:e9841dda2a74550f73982fab75c1c307505f91cc398034a64406db51443f9494 -->
-
-Branch: yubikey-gui (PR #6 merged; PR #7 open with follow-up fixes not yet on main); PR #6 merged as 54901f7
-
-<!-- /coderabbit-ai-generated:v1 -->
+Last commit: 67a13d7 (merge of PR #7: Phase 7 follow-up fixes), on main, pushed; yubikey-gui deleted
 Uncommitted: `.gstack/` and `pwvault.keyx` (both intentionally not committed)
 
 ## Session Continuity
 
 Last session: 2026-11-05
-<!-- coderabbit-ai-generated:v1 -->
-
-<!-- coderabbit-ai-generated-section:v1:8908c822008441c828418c401ec0a8d6656eb03402883b28811b37243487860f -->
-
-Stopped at: Phase 7 complete; PR #6 merged, PR #7 follow-up fixes pending on main
-
-<!-- /coderabbit-ai-generated:v1 -->
-<!-- coderabbit-ai-generated:v1 -->
-
-<!-- coderabbit-ai-generated-section:v1:abeec1f78900df88ce5ef101ef7623cc8715e4e1b2503384267878bcde1a04d9 -->
-
-Next action: incorporate PR #7 into main, then /paul:plan for Phase 8 (Offline breach check)
-
-<!-- /coderabbit-ai-generated:v1 -->
-Resume file: .paul/ROADMAP.md
+Stopped at: Plan 08-01 created
+Next action: Review and approve plan, then run /paul:apply .paul/phases/08-breach-check/08-01-PLAN.md
+Resume file: .paul/phases/08-breach-check/08-01-PLAN.md
 
 ---
 *STATE.md — Updated after every significant action*
