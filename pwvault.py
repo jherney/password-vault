@@ -40,7 +40,8 @@ import tempfile
 import time
 import urllib.parse
 import uuid
-from dataclasses import dataclass
+import copy
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -427,9 +428,19 @@ class Vault:
         if group.uuid == self.root.uuid or (self.recycle_bin and group.uuid == self.recycle_bin.uuid):
             raise VaultError("this group can't be deleted")
         if self.in_recycle_bin(group):
+            self._record_deleted(group)
             self.kp.delete_group(group)
         else:
             self.kp.trash_group(group)
+            self._moved(group)
+
+    def _moved(self, item) -> None:
+        """Stamp LocationChanged, which pykeepass never updates on a move, so a merge (here or in
+        KeePassXC) knows this side's location is the newer one."""
+        node = item._element.find("Times/LocationChanged")
+        if node is None:
+            node = etree.SubElement(item._element.find("Times"), "LocationChanged")
+        node.text = self.kp._encode_time(datetime.now(timezone.utc))
 
     # ------------------------------------------------------------ entries
 
@@ -480,6 +491,7 @@ class Vault:
             entry.add_attachment(self.kp.add_binary(data), name)
         if group is not None and group.uuid != entry.group.uuid:
             self.kp.move_entry(entry, group)
+            self._moved(entry)
         entry.touch(modify=True)
 
     def restore_history(self, entry, version) -> None:
@@ -499,15 +511,18 @@ class Vault:
     def delete_entry(self, entry) -> None:
         """Move to the recycle bin; delete permanently if it is already there."""
         if self.in_recycle_bin(entry):
+            self._record_deleted(entry)
             self.kp.delete_entry(entry)
         else:
             self._set_previous_group(entry, entry.group)
             self.kp.trash_entry(entry)
+            self._moved(entry)
 
     def restore_entry(self, entry, group=None) -> None:
         """Restore to the given group, else to the group it was trashed from, else to the root."""
         target = group or self._previous_group(entry) or self.root
         self.kp.move_entry(entry, target)
+        self._moved(entry)
         self._clear_previous_group(entry)
 
     # The group an entry was trashed from is stored in the standard PreviousParentGroup element
@@ -541,8 +556,27 @@ class Vault:
         if bin_ is None:
             return 0
         count = len(bin_.entries) + len(bin_.subgroups)
+        for item in bin_.subgroups + bin_.entries:
+            self._record_deleted(item)
         self.kp.empty_group(bin_)
         return count
+
+    def _record_deleted(self, item) -> None:
+        """Note a permanent delete in the standard DeletedObjects list, as KeePassXC does, so a
+        merge with an older copy that still has the item removes it instead of bringing it back.
+        A group records everything inside it too."""
+        root = self.kp.tree.getroot().find("Root")
+        deleted = root.find("DeletedObjects")
+        if deleted is None:
+            deleted = etree.SubElement(root, "DeletedObjects")
+        el = item._element
+        items = [el] + [e for e in el.iter("Entry", "Group")
+                        if e is not el and e.getparent().tag == "Group"]  # not History versions
+        stamp = self.kp._encode_time(datetime.now(timezone.utc))
+        for e in items:
+            obj = etree.SubElement(deleted, "DeletedObject")
+            etree.SubElement(obj, "UUID").text = e.findtext("UUID")
+            etree.SubElement(obj, "DeletionTime").text = stamp
 
     def add_attachment(self, entry, name: str, data: bytes):
         return entry.add_attachment(self.kp.add_binary(data), name)
@@ -875,6 +909,321 @@ def merge_records(vault: Vault, records: list) -> tuple:
     return added, updated
 
 
+# ---------------------------------------------------------------- merge two vaults
+#
+# Follows KeePassXC's merge (src/core/Merger.cpp, 2.8) in its Synchronize mode. Entries and groups
+# are matched by UUID. For an entry the newer LastModificationTime wins and both sides' versions
+# end up in its history; an item goes where the side with the newer LocationChanged put it; and
+# permanent deletions recorded in either DeletedObjects list apply, unless the item was changed
+# after it was deleted. Unlike KeePassXC's default mode (KeepNewer), deletions are not ignored.
+
+TIME_TAGS = ("CreationTime", "LastModificationTime", "LastAccessTime", "ExpiryTime",
+             "LocationChanged", "DeletionTime")
+EPOCH = datetime(1, 1, 1, tzinfo=timezone.utc)
+
+
+@dataclass
+class MergeReport:
+    """Changes a merge made, each as (group path, title); groups have a trailing '/'."""
+    added: list = field(default_factory=list)
+    updated: list = field(default_factory=list)
+    moved: list = field(default_factory=list)
+    deleted: list = field(default_factory=list)
+    metadata: bool = False  # DeletedObjects, custom icons, recycle bin or group times changed
+
+    @property
+    def changed(self) -> bool:
+        return bool(self.added or self.updated or self.moved or self.deleted or self.metadata)
+
+
+def merge_vaults(vault: Vault, other: PyKeePass) -> MergeReport:
+    """Merge another copy of the vault into this one, in memory. `other` is only read; the caller
+    saves `vault` (so the merge is backed up and conflict-checked like any save)."""
+    return _Merger(vault.kp, other).run()
+
+
+class _Merger:
+    def __init__(self, target: PyKeePass, source: PyKeePass):
+        self.t, self.s = target, source
+        self.report = MergeReport()
+        self.entries, self.groups = {}, {}  # target's live entries and groups, by UUID
+        for g in target.root_group._element.iter("Group"):
+            self.groups[g.findtext("UUID")] = g
+            for e in g.findall("Entry"):
+                self.entries[e.findtext("UUID")] = e
+        self.binary_refs = {}  # source binary id -> target binary id
+        self.added = {}  # UUID -> report item, so an item added and then deleted shows as neither
+
+    def run(self) -> MergeReport:
+        self.merge_group(self.s.root_group._element, self.t.root_group._element)
+        self.merge_deletions()
+        self.merge_metadata()
+        return self.report
+
+    # ---- helpers
+
+    @staticmethod
+    def time(kp, el, tag="LastModificationTime") -> datetime:
+        text = el.findtext(f"Times/{tag}")
+        return kp._decode_time(text).replace(microsecond=0) if text else EPOCH
+
+    @staticmethod
+    def title(el) -> str:
+        for s in el.findall("String"):
+            if s.findtext("Key") == "Title":
+                return s.findtext("Value") or ""
+        return ""
+
+    @staticmethod
+    def path(el) -> str:
+        names = [g.findtext("Name") or "" for g in el.iterancestors("Group")]
+        return "/".join(reversed(names))
+
+    def item(self, el):
+        if el.tag == "Group":
+            return (self.path(el), (el.findtext("Name") or "") + "/")
+        return (self.path(el), self.title(el))
+
+    def adopt(self, el):
+        """A copy of a source element in the target's terms: times in the target's encoding (KDBX 3
+        and 4 differ) and attachments pointing at copies in the target's binary pool."""
+        el = copy.deepcopy(el)
+        if self.s.version != self.t.version:
+            for times in el.iter("Times"):
+                for child in times:
+                    if child.tag in TIME_TAGS and child.text:
+                        child.text = self.t._encode_time(self.s._decode_time(child.text))
+        for value in el.iter("Value"):
+            ref = value.get("Ref")
+            if ref is not None and value.getparent().tag == "Binary":
+                value.set("Ref", str(self.binary(int(ref))))
+        return el
+
+    def binary(self, ref: int) -> int:
+        if ref not in self.binary_refs:
+            data = self.s.binaries[ref]
+            existing = self.t.binaries
+            self.binary_refs[ref] = existing.index(data) if data in existing else self.t.add_binary(data)
+        return self.binary_refs[ref]
+
+    def set_time(self, source_el, target_el, tag) -> None:
+        text = source_el.findtext(f"Times/{tag}")
+        node = target_el.find(f"Times/{tag}")
+        if text is not None and node is not None:
+            node.text = self.t._encode_time(self.s._decode_time(text))
+
+    @staticmethod
+    def put_entry(group, entry) -> None:
+        """Place (or move) an entry into a group, before its subgroups as KeePass writes them."""
+        first_group = next((i for i, c in enumerate(group) if c.tag == "Group"), None)
+        if first_group is None:
+            group.append(entry)
+        else:
+            group.insert(first_group, entry)
+
+    # ---- groups and entries
+
+    def merge_group(self, s_group, t_group) -> None:
+        for s_entry in s_group.findall("Entry"):
+            uid = s_entry.findtext("UUID")
+            t_entry = self.entries.get(uid)
+            if t_entry is None:
+                new = self.adopt(s_entry)
+                self.put_entry(t_group, new)
+                self.entries[uid] = new
+                self.added[uid] = self.item(new)
+                self.report.added.append(self.added[uid])
+                continue
+            if (self.time(self.t, t_entry, "LocationChanged") < self.time(self.s, s_entry, "LocationChanged")
+                    and t_entry.getparent() is not t_group):
+                self.put_entry(t_group, t_entry)
+                self.report.moved.append(self.item(t_entry))
+            self.resolve_entry(s_entry, t_entry)
+
+        for s_child in s_group.findall("Group"):
+            uid = s_child.findtext("UUID")
+            t_child = self.groups.get(uid)
+            if t_child is None:
+                shell = etree.Element("Group")
+                for c in s_child:
+                    if c.tag not in ("Entry", "Group"):
+                        shell.append(copy.deepcopy(c))
+                t_child = self.adopt(shell)
+                t_group.append(t_child)
+                self.groups[uid] = t_child
+                self.added[uid] = self.item(t_child)
+                self.report.added.append(self.added[uid])
+            else:
+                if (self.time(self.t, t_child, "LocationChanged") < self.time(self.s, s_child, "LocationChanged")
+                        and t_child.getparent() is not t_group):
+                    t_group.append(t_child)
+                    self.set_time(s_child, t_child, "LocationChanged")
+                    self.report.moved.append(self.item(t_child))
+                self.resolve_group(s_child, t_child)
+            self.merge_group(s_child, t_child)
+
+    def resolve_group(self, s_group, t_group) -> None:
+        """The newer side's name, notes, icon and expiry win."""
+        if not self.time(self.t, t_group) < self.time(self.s, s_group):
+            return
+        differs = False
+        for tag in ("Name", "Notes", "IconID", "CustomIconUUID"):
+            s_node, t_node = s_group.find(tag), t_group.find(tag)
+            if (s_node.text if s_node is not None else None) == (t_node.text if t_node is not None else None):
+                continue
+            differs = True
+            if s_node is None:
+                t_group.remove(t_node)
+            elif t_node is None:
+                t_group.insert(list(t_group).index(t_group.find("UUID")) + 1, copy.deepcopy(s_node))
+            else:
+                t_node.text = s_node.text
+        s_expires, t_expires = s_group.find("Times/Expires"), t_group.find("Times/Expires")
+        if s_expires is not None and t_expires is not None and (
+                s_expires.text != t_expires.text
+                or self.time(self.s, s_group, "ExpiryTime") != self.time(self.t, t_group, "ExpiryTime")):
+            differs = True
+            t_expires.text = s_expires.text
+            self.set_time(s_group, t_group, "ExpiryTime")
+        self.set_time(s_group, t_group, "LastModificationTime")
+        self.report.metadata = True
+        if differs:
+            self.report.updated.append(self.item(t_group))
+
+    def resolve_entry(self, s_entry, t_entry) -> None:
+        if self.time(self.t, t_entry) < self.time(self.s, s_entry):
+            # The other side is newer: it becomes current, this side's versions join its history.
+            new = self.adopt(s_entry)
+            self.merge_history(t_entry, self.t, new)
+            t_entry.getparent().replace(t_entry, new)
+            self.entries[new.findtext("UUID")] = new
+            self.report.updated.append(self.item(new))
+        elif self.merge_history(s_entry, self.s, t_entry):
+            self.report.updated.append(self.item(t_entry))
+
+    def merge_history(self, src, src_kp, dst) -> bool:
+        """Add src's history (and src itself, if older) to dst's history: one version per
+        modification time, oldest first, the newest HISTORY_MAX kept. Returns whether it changed."""
+        take = self.adopt if src_kp is self.s else copy.deepcopy
+        src_time, dst_time = self.time(src_kp, src), self.time(self.t, dst)
+        dst_hist = dst.find("History")
+        old = list(dst_hist) if dst_hist is not None else []
+        merged = {self.time(self.t, h): h for h in old}
+        for h in (src.find("History") if src.find("History") is not None else []):
+            when = self.time(src_kp, h)
+            if src_time > dst_time:
+                merged.pop(when, None)  # same time on both sides: the newer entry's version wins
+            if when not in merged:
+                merged[when] = take(h)
+        if dst_time > src_time and src_time not in merged:
+            version = take(src)
+            for h in version.findall("History"):
+                version.remove(h)
+            merged[src_time] = version
+        new = [merged[k] for k in sorted(merged)][-HISTORY_MAX:]
+        if [etree.tostring(h) for h in new] == [etree.tostring(h) for h in old[-HISTORY_MAX:]]:
+            return False
+        if dst_hist is None:
+            dst_hist = etree.SubElement(dst, "History")
+        for h in list(dst_hist):
+            dst_hist.remove(h)
+        dst_hist.extend(new)
+        return True
+
+    # ---- deletions and metadata
+
+    def merge_deletions(self) -> None:
+        """Apply both sides' DeletedObjects (the earliest time per UUID). An item changed after
+        it was deleted, or a group that still holds anything, stays, and its deletion is dropped."""
+        when, order = {}, []
+        for kp in (self.t, self.s):
+            for obj in kp.tree.getroot().findall("Root/DeletedObjects/DeletedObject"):
+                uid, text = obj.findtext("UUID"), obj.findtext("DeletionTime")
+                if not uid or not text:
+                    continue
+                t = kp._decode_time(text).replace(microsecond=0)
+                if uid not in when:
+                    order.append(uid)
+                    when[uid] = t
+                elif t < when[uid]:
+                    when[uid] = t
+        keep = []
+        for uid in order:
+            entry = self.entries.get(uid)
+            if entry is None:
+                if uid not in self.groups:
+                    keep.append(uid)  # already gone here: keep the record for the next merge
+                continue
+            if self.time(self.t, entry) <= when[uid]:
+                self.deleted(uid, entry)
+                del self.entries[uid]
+                keep.append(uid)
+        root_uid = self.t.root_group._element.findtext("UUID")
+        groups = [u for u in order if u in self.groups and u != root_uid]
+        groups.sort(key=lambda u: -len(list(self.groups[u].iterancestors())))  # children first
+        for uid in groups:
+            group = self.groups[uid]
+            if (self.time(self.t, group) > when[uid] or group.find("Entry") is not None
+                    or group.find("Group") is not None):
+                continue
+            self.deleted(uid, group)
+            del self.groups[uid]
+            keep.append(uid)
+        keep.sort(key=order.index)
+        records = [(u, self.t._encode_time(when[u])) for u in keep]
+        container = self.t.tree.getroot().find("Root/DeletedObjects")
+        current = [(o.findtext("UUID"), o.findtext("DeletionTime")) for o in container] \
+            if container is not None else []
+        if records != current:
+            if container is None:
+                container = etree.SubElement(self.t.tree.getroot().find("Root"), "DeletedObjects")
+            for o in list(container):
+                container.remove(o)
+            for uid, stamp in records:
+                obj = etree.SubElement(container, "DeletedObject")
+                etree.SubElement(obj, "UUID").text = uid
+                etree.SubElement(obj, "DeletionTime").text = stamp
+            self.report.metadata = True
+
+    def deleted(self, uid, el) -> None:
+        item = self.added.pop(uid, None)
+        if item is not None:
+            self.report.added.remove(item)  # came from the other side and was deleted here
+        else:
+            self.report.deleted.append(self.item(el))
+        el.getparent().remove(el)
+
+    def merge_metadata(self) -> None:
+        t_meta, s_meta = self.t.tree.getroot().find("Meta"), self.s.tree.getroot().find("Meta")
+        s_icons = s_meta.find("CustomIcons")
+        if s_icons is not None:
+            t_icons = t_meta.find("CustomIcons")
+            if t_icons is None:
+                t_icons = etree.SubElement(t_meta, "CustomIcons")
+            have = {i.findtext("UUID") for i in t_icons}
+            for icon in s_icons:
+                if icon.findtext("UUID") not in have:
+                    new = copy.deepcopy(icon)
+                    stamp = new.find("LastModificationTime")
+                    if stamp is not None and stamp.text and self.s.version != self.t.version:
+                        stamp.text = self.t._encode_time(self.s._decode_time(stamp.text))
+                    t_icons.append(new)
+                    self.report.metadata = True
+        # A copy that never had a recycle bin adopts the other side's (KeePassXC leaves it a plain
+        # group), so entries trashed over there show as trashed here too.
+        t_bin, s_bin = t_meta.find("RecycleBinUUID"), s_meta.findtext("RecycleBinUUID")
+        no_bin = t_bin is None or not t_bin.text or base64.b64decode(t_bin.text) == bytes(16)
+        if no_bin and s_bin and s_bin in self.groups:
+            if t_bin is None:
+                t_bin = etree.SubElement(t_meta, "RecycleBinUUID")
+            t_bin.text = s_bin
+            enabled = t_meta.find("RecycleBinEnabled")
+            if enabled is None:
+                enabled = etree.SubElement(t_meta, "RecycleBinEnabled")
+            enabled.text = "True"
+            self.report.metadata = True
+
+
 SHRED_CAVEAT = ("The file was overwritten and deleted, but on SSDs and copy-on-write filesystems "
                 "(like Fedora's default btrfs) old copies of the data can survive until the disk "
                 "reuses that space. Full-disk encryption is what protects it there.")
@@ -1085,6 +1434,43 @@ def cmd_import(args):
               f"Delete it (or rerun with --shred).")
 
 
+def cmd_merge(args):
+    if not args.other.is_file():
+        raise VaultError(f"no file at {args.other}")
+    if args.vault.exists() and os.path.samefile(args.other, args.vault):
+        raise VaultError(f"{args.other} is this vault itself; give the path of another copy")
+    if args.same_credentials and args.other_keyfile:
+        raise VaultError("use either --same-credentials or --other-keyfile, not both")
+    vault = unlock(args)
+    if args.same_credentials:
+        password, keyfile = vault.kp.password, vault.kp.keyfile
+    else:
+        password = getpass.getpass(f"Master password for {args.other}: ")
+        keyfile = args.other_keyfile
+        if keyfile and not keyfile.is_file():
+            raise VaultError(f"key file not found: {keyfile}")
+    try:  # read only: the other copy is never written
+        other = load_kdbx(args.other.read_bytes(), password or None, str(keyfile) if keyfile else None)
+    except VaultError as e:
+        raise VaultError(f"{args.other}: {e}")
+    report = merge_vaults(vault, other)
+    for mark, items in (("+", report.added), ("~", report.updated), (">", report.moved),
+                        ("-", report.deleted)):
+        for path, title in items:
+            print(f"  {mark} {path}/{title}")
+    if not report.changed:
+        print("Already up to date.")
+        return
+    print(f"{len(report.added)} added, {len(report.updated)} updated, {len(report.moved)} moved, "
+          f"{len(report.deleted)} deleted.")
+    if args.dry_run:
+        print("Dry run: nothing saved.")
+        return
+    vault.save()
+    print(f"Merged {args.other} into {args.vault}. The version before the merge is kept as a backup "
+          f"(`pwvault backup list`).")
+
+
 def cmd_export(args):
     vault = unlock(args)
     n = export(vault, args.out, args.format, raw=args.raw)
@@ -1281,6 +1667,14 @@ def main():
     p.add_argument("csv", type=Path)
     p.add_argument("--shred", action="store_true", help="delete the CSV after importing (best-effort overwrite first)")
     p.set_defaults(fn=cmd_import)
+
+    p = sub.add_parser("merge", help="merge another copy of the vault into this one")
+    p.add_argument("other", type=Path, help="the other copy, e.g. a sync conflict file")
+    p.add_argument("--dry-run", action="store_true", help="show what would change, save nothing")
+    p.add_argument("--same-credentials", action="store_true",
+                   help="the other copy opens with this vault's password and key file")
+    p.add_argument("--other-keyfile", type=Path, metavar="PATH", help="key file of the other copy")
+    p.set_defaults(fn=cmd_merge)
 
     p = sub.add_parser("export", help="export entries to an unencrypted file")
     p.add_argument("format", choices=EXPORT_FORMATS)

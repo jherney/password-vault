@@ -16,6 +16,7 @@ A small, local password manager. Your vault is a standard KeePass (`.kdbx`) file
 - Auto-lock after 5 minutes idle (see [Auto-lock](#auto-lock))
 - Automatic backup of the previous vault on every save, last 10 kept (see [Backups](#backups))
 - TOTP (2FA) codes, stored KeePassXC-compatibly (see [TOTP codes](#totp-2fa-codes))
+- Merge two copies of a vault edited on different devices (see [Using the vault on two devices](#using-the-vault-on-two-devices))
 
 ## Requirements
 
@@ -51,6 +52,7 @@ The default vault is `~/.local/share/pwvault/vault.kdbx`. Override it with `--va
 | `init [--new-keyfile PATH]` | Create a vault, optionally with a new key file |
 | `migrate [OLD]` | Convert an old-format `.pwv` vault to KeePass format; the old file is left untouched |
 | `import CSV [--shred]` | Import a CSV export; `--shred` deletes the CSV afterwards |
+| `merge OTHER [--dry-run] [--same-credentials] [--other-keyfile PATH]` | Merge another copy of the vault into this one (see [Using the vault on two devices](#using-the-vault-on-two-devices)) |
 | `export {csv,html,xml,txt} OUT [--raw]` | Export every entry. **The output is not encrypted.** `--raw` writes CSV values exactly (see below) |
 | `list [QUERY] [--group PATH]` | List entries, hiding passwords |
 | `get QUERY [--show]` | Copy a password to the clipboard, or print it with `--show` |
@@ -105,6 +107,26 @@ python3 pwvault.py backup restore 2   # asks for the master password
 A backup is a complete `.kdbx` file, encrypted with the master key that was in use when it was made, so it also opens in KeePassXC. `restore` checks that the backup opens with the vault's current key before it changes anything, and backs up the current vault first, so a restore can itself be undone.
 
 Changing the master key (`passwd` or the GUI) deletes the existing backups once the re-keyed vault is saved, because they would still open with the old password. The files are deleted, not overwritten: on SSDs and copy-on-write filesystems overwriting wouldn't remove old copies anyway.
+
+## Using the vault on two devices
+
+You can keep the vault file in a synced folder (Syncthing, Nextcloud and the like) and use it on more than one device. If both copies are changed before they sync, the sync tool keeps both files, for example `vault.sync-conflict-20261105-101500-ABCDEFG.kdbx` next to `vault.kdbx`. Merge the other one in:
+
+```bash
+python3 pwvault.py merge ~/Sync/vault.sync-conflict-20261105-101500-ABCDEFG.kdbx --dry-run           # see what would change
+python3 pwvault.py merge ~/Sync/vault.sync-conflict-20261105-101500-ABCDEFG.kdbx --same-credentials  # do it
+```
+
+`merge` asks for the other copy's master password unless you pass `--same-credentials`; `--other-keyfile PATH` gives its key file. It works the way KeePassXC's merge does, so a copy changed in KeePassXC merges too:
+
+- Entries and groups are matched by their internal ID, not by title, so renamed entries still match.
+- When both copies changed an entry, the most recently changed version wins and the other one is kept in the entry's history. No version is lost.
+- New entries and groups, moves and the recycle bin carry over.
+- An entry permanently deleted in one copy (emptied from the recycle bin) is deleted in the other too, unless that copy changed it after the deletion. KeePassXC's own merge leaves such entries in place by default; pwvault applies the deletion.
+
+The other file is only read. The merged vault is saved once, with the usual backup of the version before the merge, so `pwvault backup restore 1` undoes it. Delete the conflict file yourself once you've checked the result.
+
+Deletions only carry over if they were recorded: pwvault records them from 1.4.0 on, and KeePassXC always has. Entries permanently deleted with pwvault 1.3 or earlier come back the first time you merge with a copy that still has them.
 
 ## TOTP (2FA) codes
 

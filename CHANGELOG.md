@@ -2,6 +2,18 @@
 
 All notable changes to pwvault. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+- `pwvault merge OTHER.kdbx` merges another copy of the vault into this one, KeePassXC-style: entries and groups matched by UUID, the newer version wins and the other is kept in history, moves, the recycle bin and permanent deletions carry over. `--dry-run` shows the changes without saving; `--same-credentials` and `--other-keyfile` open the other copy.
+
+### Changed
+- Permanently deleting an entry or group (from the recycle bin, or by emptying it) is recorded in the vault's standard deletion list, as KeePassXC does, so the deletion survives a merge.
+- Moving an entry or group (including to and from the recycle bin) now updates its location-changed time, so a merge here or in KeePassXC knows which copy moved it last.
+
+### Security
+- The `cryptography` minimum (optional `[legacy]` extra, used only by `pwvault migrate`) is raised from 46.0.5 to 50.0.2, the locked version. OSV lists six advisories against 46.0.5 (CVE-2026-34073, CVE-2026-39892, CVE-2026-69247, CVE-2026-69248, CVE-2026-69249, GHSA-537c-gmf6-5ccf); none affects the AES-GCM and Scrypt calls pwvault makes, but the old floor allowed installing an affected version.
+
 ## [1.3.0]
 
 ### Added

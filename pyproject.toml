@@ -23,7 +23,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-legacy = ["cryptography>=46.0.5"]  # only for `pwvault migrate` from old .pwv vaults
+legacy = ["cryptography>=50.0.2"]  # only for `pwvault migrate` from old .pwv vaults
 
 [project.scripts]
 pwvault = "pwvault:main"
