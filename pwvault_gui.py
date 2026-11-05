@@ -702,7 +702,7 @@ class MergeDialog(Dialog):
             return
         path = self.other.get().strip()
         if not path:
-            return self.error.configure(text="Choose the other copy first.")
+            return self.error.configure(text="Choose the other copy first.", style="Error.TLabel")
         vault = self.app.vault
         if self.same.get():
             password, keyfile, yubikey = vault.kp.password, vault.kp.keyfile, vault.yubikey
@@ -714,7 +714,7 @@ class MergeDialog(Dialog):
                                                 yubikey)
                 report = pwvault.merge_vaults(vault, other)
         except (VaultError, OSError) as e:
-            return self.error.configure(text=sentence(e))
+            return self.error.configure(text=sentence(e), style="Error.TLabel")
         self.merged = report.changed
         self.show_report(report, Path(path).name)
 
@@ -845,12 +845,12 @@ class ChangeMasterDialog(Dialog):
 
     def apply(self):
         if self.new.get() != self.confirm.get():
-            return self.err.configure(text="New passwords don't match.")
+            return self.err.configure(text="New passwords don't match.", style="Error.TLabel")
         new_yubikey = self.yubikey.get()
         try:
             pwvault.check_master_key(self.new.get(), self.keyfile.get(), new_yubikey)
         except VaultError as e:
-            return self.err.configure(text=sentence(e))
+            return self.err.configure(text=sentence(e), style="Error.TLabel")
         with self.app.busy(), touch_prompt(self.err):
             try:
                 Vault.open(self.app.vault.path, self.cur.get(), self.app.vault.kp.keyfile,

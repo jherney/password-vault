@@ -234,6 +234,48 @@ class GuiYubiKeyTests(Base):
         self.assertTrue(any("Touch your YubiKey" in t for t in seen[0]))
         self.assertIsNotNone(self.app.vault)
 
+    def test_errors_after_a_touch_prompt_use_the_error_style(self):
+        # Regression (CodeRabbit, PR #6): touch_prompt() greys the message line; an error shown
+        # on it afterwards must switch back to the error style.
+        def touched_then_absent(_slot, _challenge):
+            pwvault.yubikey_touch_prompt()
+            raise VaultError("timed out waiting for a touch on the YubiKey")
+        plain = self.tmp / "plain.kdbx"
+        Vault.create(plain, PW).save()
+        other = self.tmp / "other.kdbx"
+        shutil.copyfile(self.path, other)
+        self.start(plain)
+        self.unlock(slot=None)
+        # Merge: the other copy needs a YubiKey that asks for a touch, then times out.
+        d = self.gui.MergeDialog(self.app)
+        d.other.set(str(other))
+        d.same.set(False)
+        d.toggle_credentials()
+        d.password.set(PW)
+        d.yubikey.set(SLOT2)
+        with patch.object(pwvault, "challenge_response", side_effect=touched_then_absent):
+            d.merge()
+        self.assertIn("other.kdbx: timed out waiting for a touch", d.error.cget("text"))
+        self.assertEqual(str(d.error.cget("style")), "Error.TLabel")
+        d.other.set("")
+        d.merge()
+        self.assertEqual(str(d.error.cget("style")), "Error.TLabel")  # "Choose the other copy first."
+        d.destroy()
+        # Change master key: a touch prompt, then a mismatch on the next attempt.
+        c = self.gui.ChangeMasterDialog(self.app)
+        c.err.configure(text="", style="Muted.TLabel")  # as touch_prompt leaves it
+        c.new.set(PW)
+        c.confirm.set(PW + "x")
+        c.apply()
+        self.assertEqual(str(c.err.cget("style")), "Error.TLabel")
+        c.confirm.set(PW)
+        c.new.set("short")
+        c.confirm.set("short")
+        c.err.configure(style="Muted.TLabel")
+        c.apply()  # too short without a key file or YubiKey
+        self.assertEqual(str(c.err.cget("style")), "Error.TLabel")
+        c.destroy()
+
     def test_driver_errors_are_shown_inline(self):
         before = self.path.read_bytes()
         for message in ("no YubiKey found; plug it in and try again",
