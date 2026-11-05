@@ -26,7 +26,7 @@ Constraints for every phase:
 | Phase | Name | Plans | Status | Completed |
 |-------|------|-------|--------|-----------|
 | 6 | Vault merge | 2/2 | ✅ Complete | 2026-11-05 |
-| 7 | YubiKey unlock | TBD | Not started | - |
+| 7 | YubiKey unlock | 1/2 | In progress | - |
 | 8 | Offline breach check | TBD | Not started | - |
 | 9 | Browser autofill | TBD | Not started | - |
 
@@ -62,7 +62,9 @@ Constraints for every phase:
 - Optional dependency only; the vault opens without it when no YubiKey is configured
 - Verified against a vault created by KeePassXC with the same key
 
-**Plans:** TBD (defined during /paul:plan)
+**Plans:**
+- [x] 07-01 (AC-5 hardware check deferred): YubiKey through all load/save paths, KeePassXC-compatible challenge-response (proven offline against KeePassXC's own YubiKey test vault), optional `yubikey-manager` driver, CLI `--yubikey`; real-key checkpoint
+- [ ] 07-02: GUI (unlock screen, change master key, merge dialog)
 
 ### Phase 8: Offline breach check
 

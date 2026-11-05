@@ -16,6 +16,7 @@ A small, local password manager. Your vault is a standard KeePass (`.kdbx`) file
 - Auto-lock after 5 minutes idle (see [Auto-lock](#auto-lock))
 - Automatic backup of the previous vault on every save, last 10 kept (see [Backups](#backups))
 - TOTP (2FA) codes, stored KeePassXC-compatibly (see [TOTP codes](#totp-2fa-codes))
+- Optional YubiKey challenge-response as part of the master key, compatible with KeePassXC (see [YubiKey](#yubikey))
 - Merge two copies of a vault edited on different devices (see [Using the vault on two devices](#using-the-vault-on-two-devices))
 
 ## Requirements
@@ -62,11 +63,11 @@ The default vault is `~/.local/share/pwvault/vault.kdbx`. Override it with `--va
 | `remove QUERY` | Move an entry to the recycle bin |
 | `trash {list,restore,empty} [QUERY]` | Work with the recycle bin |
 | `generate [-l LEN] [--no-symbols] [--no-lookalikes] [--show]` | Generate a password without saving it |
-| `passwd [--new-keyfile PATH] [--no-keyfile]` | Change the master password and/or key file |
+| `passwd [--new-keyfile PATH] [--no-keyfile] [--new-yubikey SLOT \| --no-yubikey]` | Change the master password, key file and/or YubiKey |
 | `backup {list,restore} [N]` | List the automatic backups, or restore backup `N` (see [Backups](#backups)) |
 | `keyfile PATH` | Create a random key file |
 
-Global options: `--vault PATH`, `--keyfile PATH` and `--version`.
+Global options: `--vault PATH`, `--keyfile PATH`, `--yubikey SLOT[:SERIAL]` and `--version`.
 
 ## GUI
 
@@ -144,6 +145,27 @@ python3 pwvault.py totp github --clear
 In the GUI, set it in the entry's TOTP field. The detail panel then shows the current code with a countdown, and Ctrl+T copies it.
 
 The secret is stored the way KeePassXC stores it: as an `otpauth://` link in the entry's protected `otp` field, so codes match in KeePassXC and other apps that read it. pwvault also reads the older formats KeePassXC accepts (KeeOtp's `key=…` in `otp`, and the `TOTP Seed` / `TOTP Settings` fields), including SHA-256/512, 6–10 digits, custom periods and Steam Guard codes. Setting or clearing a secret replaces the older fields. Counter-based (HOTP) codes aren't supported.
+
+## YubiKey
+
+A YubiKey's HMAC-SHA1 challenge-response slot can be part of the master key, together with the password and/or key file. pwvault does it the same way KeePassXC does, so the same vault opens in both apps with the same key. It needs the optional `yubikey-manager` package:
+
+```bash
+pip install 'pwvault-manager[yubikey]'          # or: sudo dnf install yubikey-manager
+ykman otp chalresp --generate 2                  # only if slot 2 isn't set up yet; this overwrites slot 2
+python3 pwvault.py --yubikey 2 init              # new vault that needs password + YubiKey
+python3 pwvault.py --yubikey 2 list              # every command takes --yubikey
+python3 pwvault.py passwd --new-yubikey 2        # add a YubiKey to an existing vault
+python3 pwvault.py --yubikey 2 passwd --no-yubikey   # or remove it
+```
+
+`yubikey-manager` depends on `pyscard`, which pip builds from source on Linux: install `pcsc-lite-devel` (Fedora) or `libpcsclite-dev` (Debian/Ubuntu) first, or use the distribution's `yubikey-manager` package instead.
+
+`--yubikey 2:SERIAL` picks one of several plugged-in keys (`ykman list` shows the serial). If the slot needs a touch, pwvault says so and waits 15 seconds. A YubiKey vault must be KDBX 4 with Argon2, which is what pwvault and KeePassXC create.
+
+**Keep a spare.** The secret in the YubiKey slot is part of the key and pwvault never stores it. If the key is lost or broken, the vault can't be opened. Program a second YubiKey with the same secret (`ykman otp chalresp 2 <secret>`), or keep the secret somewhere safe offline.
+
+The GUI can't open YubiKey vaults yet; that comes next.
 
 ## Security model
 

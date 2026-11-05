@@ -16,22 +16,22 @@ See: .paul/PROJECT.md (updated 2026-11-05)
 ## Current Position
 
 Milestone: v1.4 Daily-driver gaps
-Phase: 7 of 6–9 (YubiKey unlock)
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-11-05 — Phase 6 complete (06-01, 06-02), transitioned to Phase 7
+Phase: 7 of 6–9 (YubiKey unlock) — In progress
+Plan: 07-01 complete (AC-5 deferred); 07-02 (GUI) next
+Status: Ready for next PLAN
+Last activity: 2026-11-05 — Unified 07-01: YubiKey challenge-response in the CLI; full suite 218 OK
 
 Progress:
 - v1.3 Hardening, TOTP, Backups & Release: [██████████] 100% ✓ (released 2026-11-05)
-- v1.4 Daily-driver gaps: [██▌░░░░░░░] 25% (Phase 6 ✓)
-- Phase 7: [░░░░░░░░░░] 0%
+- v1.4 Daily-driver gaps: [███▌░░░░░░] 37% (Phase 6 ✓, Phase 7 half)
+- Phase 7: [█████░░░░░] 50% (07-01 ✓, 07-02 GUI next)
 
 ## Loop Position
 
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ○        ○        ○     [Ready for first PLAN of Phase 7]
+  ✓        ✓        ✓     [Loop complete - ready for next PLAN]
 ```
 
 ## Accumulated Context
@@ -49,6 +49,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | 2026-10-30: 04-01 checkpoint: fix F-01 (durable re-key purge), close F-07, complete the audit gaps; no critical/high findings, so no 04-02 fix plan for F-02–F-12 | Phase 4 | F-01 fixed in pwvault.py; F-11 and F-12 deferred to Phase 5 |
 | All vault writes go through `Vault._write()` (lock, conflict check, backup, atomic write, prune) | Phase 1 | New save paths get backups for free |
 | 2026-11-05: `pwvault merge` applies permanent deletions (KeePassXC Synchronize rules), unlike KeePassXC's default KeepNewer merge | Phase 6 | Interop test expects the same result as keepassxc-cli except for permanently deleted entries |
+| 2026-11-05: No YubiKey available (user, at 07-01 APPLY); the real-hardware checkpoint (AC-5) is deferred. KeePassXC compatibility is covered offline by KeePassXC's own YubiKey test vault and known answer; driver calls checked against yubikey-manager 5.9.2 source | Phase 7 | Driver never run against a device; first real-key use is the open item |
 | 2026-11-05: GUI merge changes the vault in memory; Save writes once, Discard/Escape/close reload from disk (no password prompt); lock drops it | Phase 6 | Pattern for later in-memory-then-confirm dialogs |
 | 2026-11-05: Every move stamps LocationChanged and every permanent delete writes DeletedObjects (pykeepass does neither) | Phase 6 | Moves and deletions made in pwvault carry over in merges here and in KeePassXC; deletions made with 1.3 or earlier were not recorded |
 
@@ -59,27 +60,29 @@ PLAN ──▶ APPLY ──▶ UNIFY
 - Phase 2: real KeePassXC not run on this machine; interop covered by RFC vectors, sample entries, and phone check
 - Phase 3: Backups restore locks the vault rather than reloading in place (approved as-is)
 - Phase 3: a stray untracked `pwvault.keyx` (32 bytes) appeared in the repo root during a test run at 21:51; source not identified (not reproduced in a later full run); `*.keyx` is now git-ignored
+- Phase 7 (07-01): AC-5 real-YubiKey check with keepassxc-cli -y; `[yubikey]` extra needs pcsc-lite-devel to build pyscard
 - Phase 6 (06-01): deletions made with pwvault ≤ 1.3 not recorded (reappear on first merge); Meta HistoryMaxItems/HistoryMaxSize not read; database CustomData not merged (revisit in Phase 9); KDBX3↔4 time re-encoding untested
 - Phase 4 (04-01): F-15 no lock file for dependencies; deferred to Phase 5 before any publish workflow. CI pins (F-11) and dependency minimums (F-12, F-14) fixed after the second CSO run
 
 ### Blockers/Concerns
 
+- Phase 7: YubiKey driver untested on hardware (no key available); AC-5 of 07-01 open until a key is used once with keepassxc-cli
 - Phase 1: ~~backups not opened in real KeePassXC~~ resolved 2026-10-30: a backup opens in keepassxc-cli 2.8.0 with correct TOTP.
 - Phase 1: after a re-key, only the purge keeps old-key backups from lingering; revisit in Phase 4's security review.
 - Resolved 04-03 (CLI-03 trash restore fixed in a follow-up): the stray `pwvault.keyx` was a test key file the user created by hand; the ignore rule stays.
 
 ### Git State
 
-Last commit: tip of vault-merge, "feat(06-vault-merge): GUI merge dialog; Phase 6 complete"
-Branch: vault-merge (from main at ce9009e), Phase 6 committed, not pushed or merged
+Last commit: 4414816 (relicense to GPL-3.0-or-later)
+Branch: main only (pushed); vault-merge, qa-fixes-2026-10-28 and claude/gracious-galileo-dqa7ky deleted after merging
 Uncommitted: `.gstack/` and `pwvault.keyx` (both intentionally not committed)
 
 ## Session Continuity
 
 Last session: 2026-11-05
-Stopped at: Phase 6 complete, ready to plan Phase 7
-Next action: /paul:plan for Phase 7 (YubiKey unlock)
-Resume file: .paul/ROADMAP.md
+Stopped at: 07-01 loop closed (uncommitted)
+Next action: /paul:plan for 07-02 (GUI YubiKey unlock)
+Resume file: .paul/phases/07-yubikey-unlock/07-01-SUMMARY.md
 
 ---
 *STATE.md — Updated after every significant action*

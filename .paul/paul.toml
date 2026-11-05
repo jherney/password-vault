@@ -17,8 +17,8 @@ phases = 4
 [phase]
 number = 7
 name = "YubiKey unlock"
-status = "not_started"
-plans_completed = 0
+status = "in_progress"
+plans_completed = 1
 
 [loop]
 position = "IDLE"
@@ -27,6 +27,6 @@ position = "IDLE"
 groom = true
 
 [stats]
-total_plans = 6
+total_plans = 7
 total_phases = 9
-last_activity = "2026-11-05T17:45:00-04:00"
+last_activity = "2026-11-05T20:40:00-04:00"

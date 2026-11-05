@@ -6,6 +6,7 @@ All notable changes to pwvault. The format follows [Keep a Changelog](https://ke
 
 ### Added
 - `pwvault merge OTHER.kdbx` merges another copy of the vault into this one, KeePassXC-style: entries and groups matched by UUID, the newer version wins and the other is kept in history, moves, the recycle bin and permanent deletions carry over. `--dry-run` shows the changes without saving; `--same-credentials` and `--other-keyfile` open the other copy.
+- YubiKey HMAC-SHA1 challenge-response as part of the master key, KeePassXC-compatible: `--yubikey SLOT[:SERIAL]` on every command, `passwd --new-yubikey/--no-yubikey`, `merge --other-yubikey`. Needs the optional `[yubikey]` extra (yubikey-manager).
 - GUI: Database > Merge another copy… shows every change from the other copy, then saves the merge (with a backup) or discards it.
 
 ### Changed

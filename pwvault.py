@@ -39,6 +39,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.parse
 import uuid
@@ -172,9 +173,9 @@ def _finish_interrupted_rekey(path: Path, blob: bytes) -> None:
     marker.unlink(missing_ok=True)
 
 
-def check_master_key(password: str, keyfile) -> None:
-    """A vault needs a strong password, or a key file (with or without a password)."""
-    if not keyfile and len(password) < MIN_MASTER_LEN:
+def check_master_key(password: str, keyfile, yubikey=None) -> None:
+    """A vault needs a strong password, or a key file or YubiKey (with or without a password)."""
+    if not keyfile and not yubikey and len(password) < MIN_MASTER_LEN:
         raise VaultError(f"use a master password of at least {MIN_MASTER_LEN} characters, or a key file")
     if keyfile and not Path(keyfile).is_file():
         raise VaultError(f"key file not found: {keyfile}")
@@ -199,7 +200,7 @@ def generate_keyfile(path: Path) -> None:
 
 
 def _read_variant_dict(data: bytes) -> dict:
-    """Integer values of a KDBX 4 VariantDictionary (the KDF parameters)."""
+    """Integer and byte-array values of a KDBX 4 VariantDictionary (the KDF parameters)."""
     out, pos = {}, 2  # skip the 2-byte format version
     while pos < len(data) and data[pos] != 0:
         vtype = data[pos]
@@ -211,17 +212,19 @@ def _read_variant_dict(data: bytes) -> dict:
         pos += 4 + vlen
         if vtype in (0x04, 0x05, 0x0C, 0x0D):  # UInt32, UInt64, Int32, Int64
             out[key] = int.from_bytes(value, "little")
+        elif vtype == 0x42:  # byte array: the KDF's UUID ($UUID) and salt (S)
+            out[key] = value
     return out
 
 
-def check_kdf_params(blob: bytes) -> None:
-    """Parse just the outer header and bound the key-derivation cost before anything runs it.
+def read_kdf_params(blob: bytes) -> tuple:
+    """(major version, KDF parameters) from the outer header, without deriving any key.
     (pykeepass derives the key while parsing, even with decrypt=False, so it can't do this.)"""
     if blob[:8] != KDBX_SIGNATURE or len(blob) < 12:
         raise VaultError("not a KeePass database")
     major = int.from_bytes(blob[10:12], "little")
     size_len = 4 if major >= 4 else 2
-    pos = 12
+    pos, params = 12, {}
     while True:
         if pos + 1 + size_len > len(blob):
             raise VaultError("vault file is truncated or corrupted")
@@ -232,17 +235,20 @@ def check_kdf_params(blob: bytes) -> None:
         if len(data) < size:
             raise VaultError("vault file is truncated or corrupted")
         if field == 0:  # end of header
-            return
+            return major, params
         if field == 6:  # KDBX 3 AES-KDF rounds
-            limits = {"R": int.from_bytes(data, "little")}
+            params = {"R": int.from_bytes(data, "little")}
         elif field == 11:  # KDBX 4 KDF parameters
-            limits = _read_variant_dict(data)
-        else:
-            continue
-        memory, passes = limits.get("M", 0), limits.get("I", 0)
-        if (memory > MAX_KDF_MEMORY or passes > MAX_KDF_ITERATIONS or memory * passes > MAX_KDF_WORK
-                or limits.get("P", 0) > MAX_KDF_PARALLELISM or limits.get("R", 0) > MAX_KDF_ROUNDS):
-            raise VaultError("vault file asks for an unreasonable amount of memory or time to unlock")
+            params = _read_variant_dict(data)
+
+
+def check_kdf_params(blob: bytes) -> None:
+    """Bound the key-derivation cost from the header before anything runs it."""
+    _, limits = read_kdf_params(blob)
+    memory, passes = limits.get("M", 0), limits.get("I", 0)
+    if (memory > MAX_KDF_MEMORY or passes > MAX_KDF_ITERATIONS or memory * passes > MAX_KDF_WORK
+            or limits.get("P", 0) > MAX_KDF_PARALLELISM or limits.get("R", 0) > MAX_KDF_ROUNDS):
+        raise VaultError("vault file asks for an unreasonable amount of memory or time to unlock")
 
 
 def check_xml_parser() -> None:
@@ -251,11 +257,145 @@ def check_xml_parser() -> None:
                          f"install lxml {'.'.join(map(str, MIN_LXML))} or newer (pip install -U lxml)")
 
 
-def load_kdbx(blob: bytes, password, keyfile) -> PyKeePass:
+# ---------------------------------------------------------------- YubiKey challenge-response
+#
+# The same scheme as KeePassXC 2.8 for KDBX 4 (src/keys/CompositeKey.cpp): the YubiKey's
+# HMAC-SHA1 slot is challenged with the KDF salt, and SHA-256 of its 20-byte response joins the
+# password and key-file hashes in the raw key that Argon2 then transforms. Nothing about the
+# YubiKey is stored in the file. pykeepass can't add the response itself, so pwvault derives the
+# transformed key and hands it to pykeepass.
+
+ARGON2_KDFS = {bytes.fromhex("ef636ddf8c29444b91f7a9a403e30a0c"): "d",    # Argon2d
+               bytes.fromhex("9e298b1956db4773b23dfc3ec6f0a1e6"): "id"}  # Argon2id
+YUBIKEY_TIMEOUT = 15  # seconds to wait for a touch
+YUBIKEY_NEEDS = "YubiKey unlock needs a KDBX 4 vault with Argon2 (pwvault creates those)"
+
+
+@dataclass(frozen=True)
+class YubiKeySlot:
+    """Which YubiKey slot answers the challenge; the serial picks one of several keys."""
+    slot: int
+    serial: int | None = None
+
+    @classmethod
+    def parse(cls, text: str) -> "YubiKeySlot":
+        """'2' or '2:12345678', the form keepassxc-cli's -y takes."""
+        slot, _, serial = str(text).partition(":")
+        if slot not in ("1", "2") or (serial and not serial.isdigit()):
+            raise VaultError(f"YubiKey slot must be 1 or 2, optionally with a serial (e.g. 2:12345678), not {text!r}")
+        return cls(int(slot), int(serial) if serial else None)
+
+    def __str__(self) -> str:
+        return f"{self.slot}:{self.serial}" if self.serial else str(self.slot)
+
+
+def yubikey_challenge_block(challenge: bytes) -> bytes:
+    """The 64-byte block KeePassXC sends: PKCS#7-style padding, which a YubiKey in variable-length
+    mode strips (with any challenge bytes equal to the pad value) before computing the HMAC."""
+    pad = 64 - len(challenge)
+    return challenge + bytes([pad]) * pad
+
+
+def challenge_response(yubikey: YubiKeySlot, challenge: bytes) -> bytes:
+    """Ask a plugged-in YubiKey for the HMAC-SHA1 response to challenge, through yubikey-manager
+    (an optional dependency, imported only here)."""
+    try:
+        from ykman.device import list_all_devices
+        from yubikit.core.otp import OtpConnection
+        from yubikit.yubiotp import SLOT, YubiOtpSession
+    except ImportError:
+        raise VaultError("YubiKey support needs the yubikey extra: pip install 'pwvault-manager[yubikey]'")
+    devices = [(d, i) for d, i in list_all_devices() if yubikey.serial in (None, i.serial)]
+    if not devices:
+        which = f" with serial {yubikey.serial}" if yubikey.serial else ""
+        raise VaultError(f"no YubiKey{which} found; plug it in and try again")
+    if len(devices) > 1:
+        raise VaultError("more than one YubiKey is plugged in; choose one with its serial, "
+                         f"e.g. --yubikey {yubikey.slot}:{devices[0][1].serial} (see `ykman list`)")
+    device, _ = devices[0]
+    slot = SLOT.ONE if yubikey.slot == 1 else SLOT.TWO
+    cancel = threading.Event()
+    timer = threading.Timer(YUBIKEY_TIMEOUT, cancel.set)
+    prompted = []
+
+    def keepalive(_status):
+        if not prompted:
+            prompted.append(True)
+            print("Touch your YubiKey…", file=sys.stderr, flush=True)
+    try:
+        with device.open_connection(OtpConnection) as conn:
+            session = YubiOtpSession(conn)
+            if not session.get_config_state().is_configured(slot):
+                raise VaultError(f"YubiKey slot {yubikey.slot} is not set up for challenge-response "
+                                 f"(set it up with: ykman otp chalresp --generate {yubikey.slot})")
+            timer.start()
+            return bytes(session.calculate_hmac_sha1(slot, yubikey_challenge_block(challenge),
+                                                     cancel, keepalive))
+    except VaultError:
+        raise
+    except Exception as e:
+        if cancel.is_set():
+            raise VaultError("timed out waiting for a touch on the YubiKey")
+        raise VaultError(f"the YubiKey didn't answer the challenge ({e})")
+    finally:
+        timer.cancel()
+
+
+def keyfile_key(keyfile) -> bytes:
+    """The key a key file contributes, by the rules pykeepass and KeePass use: XML v1 (base64) or
+    v2 (hex, checked), a 32-byte binary or 64-character hex file, otherwise SHA-256 of the file."""
+    data = Path(keyfile).read_bytes()
+    try:
+        tree = etree.fromstring(data, etree.XMLParser(resolve_entities=False, no_network=True))
+        version = tree.findtext("Meta/Version") or ""
+        text = tree.findtext("Key/Data") or ""
+        if version.startswith("1.0"):
+            return base64.b64decode(text)
+        if version.startswith("2.0"):
+            key = bytes.fromhex("".join(text.split()))
+            if hashlib.sha256(key).digest()[:4] != bytes.fromhex(tree.find("Key/Data").get("Hash", "")):
+                raise VaultError(f"key file {keyfile} is damaged (its hash doesn't match)")
+            return key
+    except etree.XMLSyntaxError:
+        pass
+    if len(data) == 32:
+        return data
+    if len(data) == 64:
+        try:
+            return bytes.fromhex(data.decode("ascii"))
+        except (UnicodeDecodeError, ValueError):
+            pass
+    return hashlib.sha256(data).digest()
+
+
+def yubikey_transformed_key(params: dict, password, keyfile, yubikey: YubiKeySlot) -> bytes:
+    """The Argon2-transformed key for password + key file + YubiKey, given the KDF parameters
+    (with the salt the YubiKey is challenged with)."""
+    kind = ARGON2_KDFS.get(params.get("$UUID"))
+    if kind is None or not params.get("S"):
+        raise VaultError(YUBIKEY_NEEDS)
+    import argon2.low_level as argon2_ll  # pykeepass's own dependency
+    response = challenge_response(yubikey, params["S"])
+    raw = hashlib.sha256((hashlib.sha256(password.encode()).digest() if password is not None else b"")
+                         + (keyfile_key(keyfile) if keyfile else b"")
+                         + hashlib.sha256(response).digest()).digest()
+    return argon2_ll.hash_secret_raw(
+        secret=raw, salt=params["S"], hash_len=32, time_cost=params["I"],
+        memory_cost=params["M"] // 1024, parallelism=params["P"], version=params["V"],
+        type=argon2_ll.Type.ID if kind == "id" else argon2_ll.Type.D)
+
+
+def load_kdbx(blob: bytes, password, keyfile, yubikey: YubiKeySlot | None = None) -> PyKeePass:
     check_kdf_params(blob)
     check_xml_parser()
+    transformed = None
+    if yubikey is not None:
+        major, params = read_kdf_params(blob)
+        if major < 4:
+            raise VaultError(YUBIKEY_NEEDS)
+        transformed = yubikey_transformed_key(params, password, keyfile, yubikey)
     try:
-        return PyKeePass(io.BytesIO(blob), password, keyfile)
+        return PyKeePass(io.BytesIO(blob), password, keyfile, transformed_key=transformed)
     except CredentialsError:
         raise VaultError("wrong master password or key file")
     except PayloadChecksumError:
@@ -275,32 +415,37 @@ class Vault:
         self.transformed_key = transformed_key
         self.rekeyed = False  # key changed and not yet saved; backups still use the old key
         self.purged_backups = 0  # old-key backups the last save deleted
+        self.yubikey = None  # YubiKeySlot that is part of the master key, if any
 
     @classmethod
-    def create(cls, path: Path, password: str, keyfile=None) -> "Vault":
-        check_master_key(password, keyfile)
+    def create(cls, path: Path, password: str, keyfile=None, yubikey=None) -> "Vault":
+        check_master_key(password, keyfile, yubikey)
         kp = PyKeePass(BLANK_DATABASE_LOCATION, BLANK_DATABASE_PASSWORD)
         kp.password, kp.keyfile = password or None, str(keyfile) if keyfile else None
-        return cls(path, kp, None, None)
+        vault = cls(path, kp, None, None)
+        vault.yubikey = yubikey
+        return vault
 
     @classmethod
-    def open(cls, path: Path, password: str, keyfile=None) -> "Vault":
+    def open(cls, path: Path, password: str, keyfile=None, yubikey=None) -> "Vault":
         try:
             blob = path.read_bytes()
         except FileNotFoundError:
             raise VaultError(f"no vault at {path}")
         if keyfile and not Path(keyfile).is_file():
             raise VaultError(f"key file not found: {keyfile}")
-        kp = load_kdbx(blob, password or None, str(keyfile) if keyfile else None)
+        kp = load_kdbx(blob, password or None, str(keyfile) if keyfile else None, yubikey)
         _finish_interrupted_rekey(path, blob)
-        return cls(path, kp, blob, kp.transformed_key)
+        vault = cls(path, kp, blob, kp.transformed_key)
+        vault.yubikey = yubikey
+        return vault
 
     def restore(self, backup: Path) -> None:
         """Make a backup the vault file again, once it's shown to open with this vault's key. The
         file it replaces is backed up first, like any save."""
         blob = backup.read_bytes()
         try:
-            kp = load_kdbx(blob, self.kp.password, self.kp.keyfile)
+            kp = load_kdbx(blob, self.kp.password, self.kp.keyfile, self.yubikey)
         except VaultError as e:
             raise VaultError(f"backup {backup.name} can't be restored: {e}")
         self._write(blob)
@@ -308,6 +453,17 @@ class Vault:
 
     def save(self) -> None:
         self.purged_backups = 0
+        new_key = self.transformed_key is None  # first save after create/rekey: a fresh salt
+        if new_key and self.yubikey is not None:
+            # pykeepass can't include the YubiKey, so pick the new salt here, challenge the key with
+            # it and derive the transformed key; saving with it keeps that salt.
+            params = self.kp.kdbx.header.value.dynamic_header.kdf_parameters.data.dict \
+                if self.kp.version >= (4, 0) else {}
+            if ARGON2_KDFS.get(params["$UUID"].value if "$UUID" in params else None) is None:
+                raise VaultError(YUBIKEY_NEEDS)
+            params["S"].value = secrets.token_bytes(32)
+            self.transformed_key = yubikey_transformed_key(
+                {k: v.value for k, v in params.items()}, self.kp.password, self.kp.keyfile, self.yubikey)
         self._prune_binaries()
         buf = io.BytesIO()
         self.kp.save(buf, transformed_key=self.transformed_key)
@@ -315,9 +471,10 @@ class Vault:
         if self.rekeyed:
             _write_rekey_marker(self.path, blob)  # so a crash before the purge is finished on open
         self._write(blob)
-        if self.transformed_key is None:
-            # First save after create/rekey ran Argon2 with a fresh salt; learn the new key.
-            self.transformed_key = PyKeePass(io.BytesIO(blob), self.kp.password, self.kp.keyfile).transformed_key
+        if new_key:
+            if self.transformed_key is None:
+                # pykeepass ran Argon2 with a fresh salt; learn the new key.
+                self.transformed_key = PyKeePass(io.BytesIO(blob), self.kp.password, self.kp.keyfile).transformed_key
             if self.rekeyed:
                 # The new file opens with the new key, so the backups, all made with the retired
                 # key (perhaps changed because it leaked), can go.
@@ -348,9 +505,11 @@ class Vault:
         finally:
             os.close(lock_fd)
 
-    def rekey(self, password: str, keyfile=None) -> None:
-        check_master_key(password, keyfile)
+    def rekey(self, password: str, keyfile=None, yubikey=None) -> None:
+        """Change the master key. yubikey is the slot the new key includes (None: no YubiKey)."""
+        check_master_key(password, keyfile, yubikey)
         self.kp.password, self.kp.keyfile = password or None, str(keyfile) if keyfile else None
+        self.yubikey = yubikey
         self.transformed_key = None
         self.rekeyed = True
 
@@ -946,14 +1105,14 @@ def check_other_copy(vault_path: Path, other: Path) -> None:
         raise VaultError(f"{other} is this vault itself; give the path of another copy")
 
 
-def open_other_copy(vault_path: Path, other: Path, password, keyfile) -> PyKeePass:
+def open_other_copy(vault_path: Path, other: Path, password, keyfile, yubikey=None) -> PyKeePass:
     """Open another copy of the vault for merge_vaults, read-only (it is never written). Used by
     both the CLI and the GUI; errors name the file."""
     check_other_copy(vault_path, other)
     if keyfile and not Path(keyfile).is_file():
         raise VaultError(f"key file not found: {keyfile}")
     try:
-        return load_kdbx(other.read_bytes(), password or None, str(keyfile) if keyfile else None)
+        return load_kdbx(other.read_bytes(), password or None, str(keyfile) if keyfile else None, yubikey)
     except VaultError as e:
         raise VaultError(f"{other}: {e}")
 
@@ -1368,10 +1527,11 @@ def migrate_legacy(old: Path, new: Path, password: str, keyfile=None) -> Vault:
 
 # ---------------------------------------------------------------- CLI helpers
 
-def prompt_new_master(keyfile=None) -> str:
+def prompt_new_master(keyfile=None, yubikey=None) -> str:
     while True:
-        pw = getpass.getpass("New master password" + (" (may be blank with a key file): " if keyfile else ": "))
-        if not keyfile and len(pw) < MIN_MASTER_LEN:
+        pw = getpass.getpass("New master password" + (" (may be blank with a key file or YubiKey): "
+                                                      if keyfile or yubikey else ": "))
+        if not keyfile and not yubikey and len(pw) < MIN_MASTER_LEN:
             print(f"Use at least {MIN_MASTER_LEN} characters (a passphrase of 4+ random words is ideal).")
             continue
         if getpass.getpass("Confirm master password: ") != pw:
@@ -1380,11 +1540,18 @@ def prompt_new_master(keyfile=None) -> str:
         return pw
 
 
+def yubikey_arg(text: str) -> YubiKeySlot:
+    try:
+        return YubiKeySlot.parse(text)
+    except VaultError as e:
+        raise argparse.ArgumentTypeError(str(e))
+
+
 def unlock(args) -> Vault:
     if not args.vault.exists():
         hint = " — run `pwvault migrate`" if LEGACY_VAULT.exists() else " — run `pwvault init` first"
         sys.exit(f"error: no vault at {args.vault}{hint}")
-    return Vault.open(args.vault, getpass.getpass("Master password: "), args.keyfile)
+    return Vault.open(args.vault, getpass.getpass("Master password: "), args.keyfile, args.yubikey)
 
 
 def find(vault: Vault, query: str, in_bin=False) -> list:
@@ -1426,12 +1593,15 @@ def cmd_init(args):
         sys.exit(f"error: a vault already exists at {args.vault}")
     keyfile = args.new_keyfile or args.keyfile
     print("Choose a master password. It can't be recovered if you forget it.")
-    password = prompt_new_master(keyfile)
+    password = prompt_new_master(keyfile, args.yubikey)
     if args.new_keyfile:  # only now, so aborting at the prompt leaves no stray key file
         generate_keyfile(args.new_keyfile)
         print(f"Created key file {args.new_keyfile}. Back it up: without it the vault can't be opened.")
-    Vault.create(args.vault, password, keyfile).save()
+    Vault.create(args.vault, password, keyfile, args.yubikey).save()
     print(f"Created encrypted KeePass vault at {args.vault}")
+    if args.yubikey:
+        print(f"It also needs YubiKey slot {args.yubikey.slot} (--yubikey {args.yubikey}). "
+              f"Keep a second key with the same secret: without it the vault can't be opened.")
 
 
 def cmd_migrate(args):
@@ -1458,14 +1628,15 @@ def cmd_import(args):
 
 def cmd_merge(args):
     check_other_copy(args.vault, args.other)  # before asking for any password
-    if args.same_credentials and args.other_keyfile:
-        raise VaultError("use either --same-credentials or --other-keyfile, not both")
+    if args.same_credentials and (args.other_keyfile or args.other_yubikey):
+        raise VaultError("use either --same-credentials or --other-keyfile/--other-yubikey, not both")
     vault = unlock(args)
     if args.same_credentials:
-        password, keyfile = vault.kp.password, vault.kp.keyfile
+        password, keyfile, yubikey = vault.kp.password, vault.kp.keyfile, vault.yubikey
     else:
-        password, keyfile = getpass.getpass(f"Master password for {args.other}: "), args.other_keyfile
-    report = merge_vaults(vault, open_other_copy(args.vault, args.other, password, keyfile))
+        password = getpass.getpass(f"Master password for {args.other}: ")
+        keyfile, yubikey = args.other_keyfile, args.other_yubikey
+    report = merge_vaults(vault, open_other_copy(args.vault, args.other, password, keyfile, yubikey))
     for mark, items in (("+", report.added), ("~", report.updated), (">", report.moved),
                         ("-", report.deleted)):
         for path, title in items:
@@ -1617,13 +1788,16 @@ def cmd_generate(args):
 def cmd_passwd(args):
     vault = unlock(args)
     keyfile = None if args.no_keyfile else (args.new_keyfile or args.keyfile)
-    password = prompt_new_master(keyfile)
+    yubikey = None if args.no_yubikey else (args.new_yubikey or args.yubikey)
+    password = prompt_new_master(keyfile, yubikey)
     if args.new_keyfile:  # only now, so aborting at the prompt leaves no stray key file
         generate_keyfile(args.new_keyfile)
         print(f"Created key file {args.new_keyfile}. Back it up: without it the vault can't be opened.")
-    vault.rekey(password, keyfile)
+    vault.rekey(password, keyfile, yubikey)
     vault.save()
-    print("Master key changed." + (f" The vault now also needs {keyfile}." if keyfile else ""))
+    needs = [str(keyfile)] if keyfile else []
+    needs += [f"YubiKey slot {yubikey.slot} (--yubikey {yubikey})"] if yubikey else []
+    print("Master key changed." + (f" The vault now also needs {' and '.join(needs)}." if needs else ""))
     if vault.purged_backups:
         print(f"Removed {vault.purged_backups} backups made with the old master key.")
 
@@ -1665,6 +1839,8 @@ def main():
     ap.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     ap.add_argument("--vault", type=Path, default=DEFAULT_VAULT, help=f"vault file (default {DEFAULT_VAULT})")
     ap.add_argument("--keyfile", type=Path, help="key file that unlocks the vault")
+    ap.add_argument("--yubikey", type=yubikey_arg, metavar="SLOT[:SERIAL]",
+                    help="YubiKey HMAC-SHA1 challenge-response slot that is part of the key (as keepassxc-cli -y)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("init", help="create a new vault")
@@ -1686,6 +1862,8 @@ def main():
     p.add_argument("--same-credentials", action="store_true",
                    help="the other copy opens with this vault's password and key file")
     p.add_argument("--other-keyfile", type=Path, metavar="PATH", help="key file of the other copy")
+    p.add_argument("--other-yubikey", type=yubikey_arg, metavar="SLOT[:SERIAL]",
+                   help="YubiKey slot of the other copy")
     p.set_defaults(fn=cmd_merge)
 
     p = sub.add_parser("export", help="export entries to an unencrypted file")
@@ -1739,6 +1917,10 @@ def main():
     p = sub.add_parser("passwd", help="change the master password and/or key file")
     p.add_argument("--new-keyfile", type=Path, metavar="PATH", help="create and require a new key file")
     p.add_argument("--no-keyfile", action="store_true", help="stop requiring a key file")
+    yk = p.add_mutually_exclusive_group()
+    yk.add_argument("--new-yubikey", type=yubikey_arg, metavar="SLOT[:SERIAL]",
+                    help="require this YubiKey slot from now on (default: keep the current one)")
+    yk.add_argument("--no-yubikey", action="store_true", help="stop requiring a YubiKey")
     p.set_defaults(fn=cmd_passwd)
 
     p = sub.add_parser("backup", help=f"list or restore the last {BACKUP_KEEP} versions of the vault")

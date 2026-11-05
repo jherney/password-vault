@@ -24,6 +24,7 @@ classifiers = [
 
 [project.optional-dependencies]
 legacy = ["cryptography>=50.0.2"]  # only for `pwvault migrate` from old .pwv vaults
+yubikey = ["yubikey-manager>=5.5"]  # only for YubiKey challenge-response unlock
 
 [project.scripts]
 pwvault = "pwvault:main"

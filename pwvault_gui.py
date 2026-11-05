@@ -612,12 +612,13 @@ class MergeDialog(Dialog):
             return self.error.configure(text="Choose the other copy first.")
         vault = self.app.vault
         if self.same.get():
-            password, keyfile = vault.kp.password, vault.kp.keyfile
+            password, keyfile, yubikey = vault.kp.password, vault.kp.keyfile, vault.yubikey
         else:
-            password, keyfile = self.password.get(), self.keyfile.get()
+            password, keyfile, yubikey = self.password.get(), self.keyfile.get(), None
         try:
             with self.app.busy():
-                other = pwvault.open_other_copy(vault.path, Path(path).expanduser(), password, keyfile)
+                other = pwvault.open_other_copy(vault.path, Path(path).expanduser(), password, keyfile,
+                                                yubikey)
                 report = pwvault.merge_vaults(vault, other)
         except (VaultError, OSError) as e:
             return self.error.configure(text=str(e).capitalize() + ".")
@@ -755,10 +756,11 @@ class ChangeMasterDialog(Dialog):
             return self.err.configure(text=str(e).capitalize() + ".")
         with self.app.busy():
             try:
-                Vault.open(self.app.vault.path, self.cur.get(), self.app.vault.kp.keyfile)
+                Vault.open(self.app.vault.path, self.cur.get(), self.app.vault.kp.keyfile,
+                           self.app.vault.yubikey)
             except VaultError:
                 return self.err.configure(text="Current password is wrong.")
-            self.app.vault.rekey(self.new.get(), self.keyfile.get())
+            self.app.vault.rekey(self.new.get(), self.keyfile.get(), self.app.vault.yubikey)  # GUI keeps the YubiKey
             if not self.app.save():
                 return
         purged = self.app.vault.purged_backups
@@ -908,7 +910,7 @@ class App:
         v = self.vault
         try:
             with self.busy():
-                self.vault = Vault.open(v.path, v.kp.password, v.kp.keyfile)
+                self.vault = Vault.open(v.path, v.kp.password, v.kp.keyfile, v.yubikey)
         except (VaultError, OSError) as err:
             return self.lock(f"{msg} Couldn't reload the vault ({err}); unlock to continue.".strip())
         self.refresh_groups()
