@@ -7,9 +7,11 @@ All notable changes to pwvault. The format follows [Keep a Changelog](https://ke
 ### Added
 - `pwvault merge OTHER.kdbx` merges another copy of the vault into this one, KeePassXC-style: entries and groups matched by UUID, the newer version wins and the other is kept in history, moves, the recycle bin and permanent deletions carry over. `--dry-run` shows the changes without saving; `--same-credentials` and `--other-keyfile` open the other copy.
 - YubiKey HMAC-SHA1 challenge-response as part of the master key, KeePassXC-compatible: `--yubikey SLOT[:SERIAL]` on every command, `passwd --new-yubikey/--no-yubikey`, `merge --other-yubikey`. Needs the optional `[yubikey]` extra (yubikey-manager).
+- GUI: YubiKey choice on the unlock and create screens (remembered per vault), in Change master key and in Merge another copy; "Touch your YubiKey…" while it waits.
 - GUI: Database > Merge another copy… shows every change from the other copy, then saves the merge (with a backup) or discards it.
 
 ### Changed
+- GUI error messages keep their capitals (file paths and names like YubiKey were shown lowercased).
 - License changed from MIT to GPL-3.0-or-later, the license of pykeepass, which pwvault is built on. Releases up to 1.3.0 remain available under MIT.
 - Permanently deleting an entry or group (from the recycle bin, or by emptying it) is recorded in the vault's standard deletion list, as KeePassXC does, so the deletion survives a merge.
 - Moving an entry or group (including to and from the recycle bin) now updates its location-changed time, so a merge here or in KeePassXC knows which copy moved it last.

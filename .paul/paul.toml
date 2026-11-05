@@ -21,7 +21,9 @@ status = "in_progress"
 plans_completed = 1
 
 [loop]
-position = "IDLE"
+position = "APPLY"
+plan = "07-02"
+plan_path = "phases/07-yubikey-unlock/07-02-PLAN.md"
 
 [satellite]
 groom = true

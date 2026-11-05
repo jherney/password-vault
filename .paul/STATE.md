@@ -16,10 +16,10 @@ See: .paul/PROJECT.md (updated 2026-11-05)
 ## Current Position
 
 Milestone: v1.4 Daily-driver gaps
-Phase: 7 of 6–9 (YubiKey unlock) — In progress
-Plan: 07-01 complete (AC-5 deferred); 07-02 (GUI) next
-Status: Ready for next PLAN
-Last activity: 2026-11-05 — Unified 07-01: YubiKey challenge-response in the CLI; full suite 218 OK
+Phase: 7 of 6–9 (YubiKey unlock) — Applying
+Plan: 07-02 applying: tasks 1–2 done, GUI checkpoint (task 3) awaiting the user
+Status: APPLY in progress (full suite 229 OK; local CodeRabbit review: no code findings)
+Last activity: 2026-11-05 — 07-02 tasks done, committed on branch yubikey-gui for a PR review
 
 Progress:
 - v1.3 Hardening, TOTP, Backups & Release: [██████████] 100% ✓ (released 2026-11-05)
@@ -31,7 +31,7 @@ Progress:
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ✓        ✓        ✓     [Loop complete - ready for next PLAN]
+  ✓        ◐        ○     [Applying: checkpoint pending]
 ```
 
 ## Accumulated Context
@@ -73,16 +73,16 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 ### Git State
 
-Last commit: 4414816 (relicense to GPL-3.0-or-later)
-Branch: main only (pushed); vault-merge, qa-fixes-2026-10-28 and claude/gracious-galileo-dqa7ky deleted after merging
+Last commit: 0a11adb (07-01 YubiKey CLI), pushed
+Branch: yubikey-gui (07-02, PR to main); main at 0a11adb
 Uncommitted: `.gstack/` and `pwvault.keyx` (both intentionally not committed)
 
 ## Session Continuity
 
 Last session: 2026-11-05
-Stopped at: 07-01 loop closed (uncommitted)
-Next action: /paul:plan for 07-02 (GUI YubiKey unlock)
-Resume file: .paul/phases/07-yubikey-unlock/07-01-SUMMARY.md
+Stopped at: 07-02 tasks 1–2 applied, GUI checkpoint pending
+Next action: user approves the 07-02 GUI checkpoint, then /paul:unify .paul/phases/07-yubikey-unlock/07-02-PLAN.md
+Resume file: .paul/phases/07-yubikey-unlock/07-02-PLAN.md
 
 ---
 *STATE.md — Updated after every significant action*

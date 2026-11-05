@@ -7,12 +7,14 @@ Uses the same vault file and code as the `pwvault.py` CLI.
 """
 
 import configparser
+import hashlib
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import tkinter as tk
+from contextlib import contextmanager
 from pathlib import Path
 from time import monotonic, time
 from tkinter import filedialog, messagebox, simpledialog, ttk
@@ -73,24 +75,80 @@ def settings_path(home: Path | None = None) -> Path:
     return (Path(base) if base else (home or Path.home()) / ".config") / "pwvault" / "settings.ini"
 
 
-def read_theme_choice(path: Path | None = None) -> str:
-    """'system', 'light' or 'dark' as saved in settings.ini. A missing or unreadable file means 'system'."""
+def read_settings(path: Path | None = None) -> configparser.ConfigParser:
+    """settings.ini as it is now; a missing or unreadable file reads as empty."""
     cp = configparser.ConfigParser(interpolation=None)
     try:
         cp.read(path or settings_path(), encoding="utf-8")
-        choice = cp.get("ui", "theme", fallback="system")
     except (configparser.Error, OSError, ValueError):
+        cp = configparser.ConfigParser(interpolation=None)
+    return cp
+
+
+def write_setting(section: str, key: str, value: str | None, path: Path | None = None) -> None:
+    """Set (or, with None, remove) one value, keeping everything else in settings.ini."""
+    path = path or settings_path()
+    cp = read_settings(path)
+    if value is None:
+        if not cp.has_option(section, key):
+            return
+        cp.remove_option(section, key)
+    else:
+        if not cp.has_section(section):
+            cp.add_section(section)
+        cp.set(section, key, value)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        cp.write(f)
+
+
+def read_theme_choice(path: Path | None = None) -> str:
+    """'system', 'light' or 'dark' as saved in settings.ini. A missing or unreadable file means 'system'."""
+    try:
+        choice = read_settings(path).get("ui", "theme", fallback="system")
+    except (configparser.Error, ValueError):
         return "system"
     return choice if choice in THEME_CHOICES else "system"
 
 
 def write_theme_choice(choice: str, path: Path | None = None) -> None:
-    path = path or settings_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    cp = configparser.ConfigParser(interpolation=None)
-    cp["ui"] = {"theme": choice}
-    with path.open("w", encoding="utf-8") as f:
-        cp.write(f)
+    write_setting("ui", "theme", choice, path)
+
+
+def _vault_key(vault_path) -> str:
+    # A hash of the resolved path: INI keys can't hold every path, and the file needn't list them.
+    return hashlib.sha256(str(Path(vault_path).resolve()).encode()).hexdigest()[:32]
+
+
+def remembered_yubikey(vault_path, path: Path | None = None):
+    """The YubiKey slot last used to unlock this vault, or None. Only the slot number is kept."""
+    try:
+        value = read_settings(path).get("yubikey", _vault_key(vault_path), fallback="")
+    except (configparser.Error, ValueError):
+        return None
+    return pwvault.YubiKeySlot(int(value)) if value in ("1", "2") else None
+
+
+def remember_yubikey(vault_path, yubikey, path: Path | None = None) -> None:
+    try:
+        write_setting("yubikey", _vault_key(vault_path), str(yubikey.slot) if yubikey else None, path)
+    except OSError:
+        pass  # a convenience only; never fail an unlock over it
+
+
+@contextmanager
+def touch_prompt(label):
+    """While a YubiKey may be challenged, show its touch prompt in label (drawn at once, since the
+    wait blocks the Tk loop)."""
+    def show():
+        label.configure(text="Touch your YubiKey…", style="Muted.TLabel")
+        label.update_idletasks()
+    previous = pwvault.yubikey_touch_prompt
+    pwvault.yubikey_touch_prompt = show
+    try:
+        yield
+    finally:
+        pwvault.yubikey_touch_prompt = previous
 
 
 def theme_label(choice: str) -> str:
@@ -207,6 +265,37 @@ class KeyFileField(ttk.Frame):
 
     def get(self):
         return self.var.get().strip() or None
+
+
+class YubiKeyField(ttk.Frame):
+    """Which YubiKey slot, if any, is part of the master key."""
+
+    CHOICES = ("No YubiKey", "YubiKey slot 1", "YubiKey slot 2")
+
+    def __init__(self, master, value=None, **kw):
+        super().__init__(master, **kw)
+        self.var = tk.StringVar()
+        self.box = ttk.Combobox(self, textvariable=self.var, values=self.CHOICES, state="readonly", width=24)
+        self.box.pack(side="left", fill="x", expand=True)
+        self.set(value)
+
+    def get(self):
+        slot = self.CHOICES.index(self.var.get()) if self.var.get() in self.CHOICES else 0
+        return pwvault.YubiKeySlot(slot) if slot else None
+
+    def set(self, yubikey):
+        self.var.set(self.CHOICES[yubikey.slot if yubikey else 0])
+
+    def enable(self, on: bool):
+        self.box.configure(state="readonly" if on else "disabled")
+
+
+def sentence(message) -> str:
+    """An error message as a sentence: first letter capitalized, nothing else changed (unlike
+    str.capitalize, which lowercased paths and names such as YubiKey), ending with a period."""
+    text = str(message).strip()
+    text = text[:1].upper() + text[1:]
+    return text if text.endswith((".", "!", "?")) else text + "."
 
 
 def safe_filename(name) -> str:
@@ -425,7 +514,7 @@ class EntryDialog(Dialog):
         try:
             expiry = pwvault.expiry_from_date(self.expiry.get()) if self.expires.get() else None
         except VaultError as e:
-            return self.err.configure(text=str(e).capitalize() + ".")
+            return self.err.configure(text=sentence(e))
         if self.expires.get() and expiry is None:
             return self.err.configure(text="Enter an expiry date, or untick Expires.")
         otp = self.otp.get().strip()
@@ -541,7 +630,7 @@ class BackupsDialog(Dialog):
         try:
             self.app.vault.restore(path)
         except (VaultError, OSError) as err:
-            self.error.configure(text=str(err).capitalize() + ".")
+            self.error.configure(text=sentence(err))
             return
         # Locking drops the in-memory vault and asks for the password again, so the entries shown
         # are the restored file's (the same reload the app does after a failed save).
@@ -577,10 +666,13 @@ class MergeDialog(Dialog):
         ttk.Label(b, text="Key file").grid(row=4, column=0, sticky="w", pady=4, padx=(0, 10))
         self.keyfile = KeyFileField(b, app)
         self.keyfile.grid(row=4, column=1, sticky="ew")
+        ttk.Label(b, text="YubiKey").grid(row=5, column=0, sticky="w", pady=4, padx=(0, 10))
+        self.yubikey = YubiKeyField(b)
+        self.yubikey.grid(row=5, column=1, sticky="ew")
         self.error = ttk.Label(b, style="Error.TLabel", wraplength=420)
-        self.error.grid(row=5, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        self.error.grid(row=6, column=0, columnspan=2, sticky="w", pady=(6, 0))
         btns = ttk.Frame(b)
-        btns.grid(row=6, column=0, columnspan=2, sticky="e", pady=(10, 0))
+        btns.grid(row=7, column=0, columnspan=2, sticky="e", pady=(10, 0))
         ttk.Button(btns, text="Cancel", command=self.destroy).pack(side="left", padx=4)
         ttk.Button(btns, text="Merge", style="Accent.TButton", command=self.merge).pack(side="left")
         self.bind("<Return>", lambda e: self.merge())
@@ -603,6 +695,7 @@ class MergeDialog(Dialog):
         for field in (self.pw_field, self.keyfile):
             for w in field.winfo_children():
                 w.configure(state=state)
+        self.yubikey.enable(not self.same.get())
 
     def merge(self):
         if self.merged or self.app.vault is None:
@@ -614,14 +707,14 @@ class MergeDialog(Dialog):
         if self.same.get():
             password, keyfile, yubikey = vault.kp.password, vault.kp.keyfile, vault.yubikey
         else:
-            password, keyfile, yubikey = self.password.get(), self.keyfile.get(), None
+            password, keyfile, yubikey = self.password.get(), self.keyfile.get(), self.yubikey.get()
         try:
-            with self.app.busy():
+            with self.app.busy(), touch_prompt(self.error):
                 other = pwvault.open_other_copy(vault.path, Path(path).expanduser(), password, keyfile,
                                                 yubikey)
                 report = pwvault.merge_vaults(vault, other)
         except (VaultError, OSError) as e:
-            return self.error.configure(text=str(e).capitalize() + ".")
+            return self.error.configure(text=sentence(e))
         self.merged = report.changed
         self.show_report(report, Path(path).name)
 
@@ -718,7 +811,7 @@ class GeneratorDialog(Dialog):
             self.out.set(pwvault.generate_password(n, **{k: v.get() for k, v in self.opts.items()}))
             self.err.configure(text="")
         except VaultError as e:
-            self.err.configure(text=str(e).capitalize() + ".")
+            self.err.configure(text=sentence(e))
 
 
 class ChangeMasterDialog(Dialog):
@@ -736,12 +829,15 @@ class ChangeMasterDialog(Dialog):
         self.keyfile.grid(row=4, column=1, sticky="ew")
         if app.vault.kp.keyfile:
             self.keyfile.var.set(app.vault.kp.keyfile)
-        ttk.Label(b, text="Leave the key file empty to unlock with the password alone.",
-                  style="Muted.TLabel").grid(row=5, column=0, columnspan=2, sticky="w")
-        self.err = ttk.Label(b, text="", style="Error.TLabel")
-        self.err.grid(row=6, column=0, columnspan=2, sticky="w")
+        ttk.Label(b, text="New YubiKey").grid(row=5, column=0, sticky="w", pady=4, padx=(0, 10))
+        self.yubikey = YubiKeyField(b, app.vault.yubikey)
+        self.yubikey.grid(row=5, column=1, sticky="ew")
+        ttk.Label(b, text="Leave the key file empty and choose No YubiKey to unlock with the password alone.",
+                  style="Muted.TLabel", wraplength=380).grid(row=6, column=0, columnspan=2, sticky="w")
+        self.err = ttk.Label(b, text="", style="Error.TLabel", wraplength=380)
+        self.err.grid(row=7, column=0, columnspan=2, sticky="w")
         btns = ttk.Frame(b)
-        btns.grid(row=7, column=0, columnspan=2, sticky="e", pady=(10, 0))
+        btns.grid(row=8, column=0, columnspan=2, sticky="e", pady=(10, 0))
         ttk.Button(btns, text="Cancel", command=self.destroy).pack(side="left", padx=4)
         ttk.Button(btns, text="Change", style="Accent.TButton", command=self.apply).pack(side="left")
         self.bind("<Return>", lambda e: self.apply())
@@ -750,19 +846,25 @@ class ChangeMasterDialog(Dialog):
     def apply(self):
         if self.new.get() != self.confirm.get():
             return self.err.configure(text="New passwords don't match.")
+        new_yubikey = self.yubikey.get()
         try:
-            pwvault.check_master_key(self.new.get(), self.keyfile.get())
+            pwvault.check_master_key(self.new.get(), self.keyfile.get(), new_yubikey)
         except VaultError as e:
-            return self.err.configure(text=str(e).capitalize() + ".")
-        with self.app.busy():
+            return self.err.configure(text=sentence(e))
+        with self.app.busy(), touch_prompt(self.err):
             try:
                 Vault.open(self.app.vault.path, self.cur.get(), self.app.vault.kp.keyfile,
                            self.app.vault.yubikey)
-            except VaultError:
-                return self.err.configure(text="Current password is wrong.")
-            self.app.vault.rekey(self.new.get(), self.keyfile.get(), self.app.vault.yubikey)  # GUI keeps the YubiKey
+            except VaultError as e:
+                wrong = str(e).startswith("wrong master password")
+                return self.err.configure(text="Current password is wrong." if wrong
+                                          else sentence(e), style="Error.TLabel")
+            self.app.vault.rekey(self.new.get(), self.keyfile.get(), new_yubikey)
+            # A failed save (e.g. the new YubiKey didn't answer) writes nothing; app.save reports
+            # it and reloads the file from disk, so the vault keeps its old key.
             if not self.app.save():
                 return
+        remember_yubikey(self.app.vault.path, new_yubikey)
         purged = self.app.vault.purged_backups
         self.app.status("Master key changed." + (f" Removed {purged} backups made with the old key."
                                                   if purged else ""))
@@ -900,7 +1002,7 @@ class App:
                 self.vault.save()
             return True
         except (VaultError, OSError) as err:
-            messagebox.showerror("Save failed", str(err).capitalize() + ".", parent=self.root)
+            messagebox.showerror("Save failed", sentence(err), parent=self.root)
             self.lock("Not saved — vault reloaded from disk.")
             return False
 
@@ -909,7 +1011,7 @@ class App:
         the password isn't asked for. If that fails, lock (the next unlock reads the file)."""
         v = self.vault
         try:
-            with self.busy():
+            with self.busy(), touch_prompt(self.status_lbl):
                 self.vault = Vault.open(v.path, v.kp.password, v.kp.keyfile, v.yubikey)
         except (VaultError, OSError) as err:
             return self.lock(f"{msg} Couldn't reload the vault ({err}); unlock to continue.".strip())
@@ -944,9 +1046,12 @@ class App:
             ttk.Label(box, text="Key file (optional)", style="Muted.TLabel").pack(anchor="w", pady=(8, 0))
             keyfile = KeyFileField(box, self, allow_new=creating)
             keyfile.pack(fill="x", pady=4)
+            ttk.Label(box, text="YubiKey (optional)", style="Muted.TLabel").pack(anchor="w", pady=(8, 0))
+            yubikey = YubiKeyField(box, None if creating else remembered_yubikey(self.path))
+            yubikey.pack(fill="x", pady=4)
         if creating:
             ttk.Label(box, text=f"Use a password of at least {pwvault.MIN_MASTER_LEN} characters, a key file, "
-                                "or both. Neither can be recovered if lost.",
+                                "a YubiKey, or a combination. None of them can be recovered if lost.",
                       style="Muted.TLabel", wraplength=340).pack(pady=(6, 0))
         if migrating:
             ttk.Label(box, text=f"Your entries will be copied into {self.path.name} (a KeePass file). "
@@ -959,20 +1064,23 @@ class App:
         def submit(_e=None):
             p = pw.get()
             kf = None if migrating else keyfile.get()
+            yk = None if migrating else yubikey.get()
             if creating and p != confirm.get():
                 return err.configure(text="Passwords don't match.", style="Error.TLabel")
-            with self.busy():
+            with self.busy(), touch_prompt(err):
                 try:
                     if migrating:
                         vault = pwvault.migrate_legacy(pwvault.LEGACY_VAULT, self.path, p)
                     elif creating:
-                        vault = Vault.create(self.path, p, kf)
+                        vault = Vault.create(self.path, p, kf, yk)
                         vault.save()
                     else:
-                        vault = Vault.open(self.path, p, kf)
+                        vault = Vault.open(self.path, p, kf, yk)
                 except (VaultError, OSError) as e:
                     pw.set("")
-                    return err.configure(text=str(e).capitalize() + ".", style="Error.TLabel")
+                    return err.configure(text=sentence(e), style="Error.TLabel")
+            if not migrating:
+                remember_yubikey(self.path, yk)
             pw.set("")  # don't leave the master password sitting in Tk variables
             confirm.set("")
             self.vault = vault
@@ -1156,7 +1264,7 @@ class App:
         try:
             group = self.vault.add_group(parent, name)
         except VaultError as e:
-            return messagebox.showerror("New group", str(e).capitalize() + ".", parent=self.root)
+            return messagebox.showerror("New group", sentence(e), parent=self.root)
         if self.save():
             self.show_group(group)
 
@@ -1168,7 +1276,7 @@ class App:
         try:
             self.vault.rename_group(group, name)
         except VaultError as e:
-            return messagebox.showerror("Rename group", str(e).capitalize() + ".", parent=self.root)
+            return messagebox.showerror("Rename group", sentence(e), parent=self.root)
         if self.save():
             self.refresh_groups()
 
@@ -1183,7 +1291,7 @@ class App:
         try:
             v.delete_group(group)
         except VaultError as e:
-            return messagebox.showerror("Delete group", str(e).capitalize() + ".", parent=self.root)
+            return messagebox.showerror("Delete group", sentence(e), parent=self.root)
         if self.save():
             self.show_group(v.root)
 
