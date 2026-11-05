@@ -48,14 +48,14 @@ I can keep all my passwords in one encrypted local vault that I control, use it 
 - ✓ PyPI release `pwvault-manager` 1.3.0 and desktop launcher — Phase 5
 - ✓ Merge two copies of a vault, KeePassXC-compatible (UUID match, history, moves, recycle bin, permanent deletions): `pwvault merge` and GUI Database > Merge another copy… — Phase 6
 - ✓ Permanent deletes recorded in DeletedObjects and moves stamp LocationChanged, so they carry over in merges here and in KeePassXC — Phase 6
+- ✓ YubiKey HMAC-SHA1 challenge-response as part of the master key, KeePassXC-compatible (CLI `--yubikey`, GUI slot choice remembered per vault); proven against KeePassXC's own YubiKey test vault, not yet with a physical key — Phase 7
 
 ### Active (In Progress)
 
-- v1.4 Daily-driver gaps: Phase 7 YubiKey unlock is next
+- v1.4 Daily-driver gaps: Phase 8 offline breach check is next
 
 ### Planned (Next)
 
-- Phase 7: YubiKey HMAC-SHA1 challenge-response unlock, KeePassXC-compatible
 - Phase 8: offline breach check (HIBP hash list)
 - Phase 9: browser autofill (WebExtension + native messaging)
 
@@ -100,11 +100,11 @@ I can keep all my passwords in one encrypted local vault that I control, use it 
 
 | Metric | Target | Current | Status |
 |--------|--------|---------|--------|
-| CI test suite | All existing + new tests pass | 195 passing (last full run, 2026-11-05) | On track |
+| CI test suite | All existing + new tests pass | 230 passing (last full run 229 + regression tests, 2026-11-05) | On track |
 | TOTP interoperability | Codes match KeePassXC for same entry | RFC vectors + phone check pass; real KeePassXC not run here | Met (partial evidence) |
 | Save safety | Failed/interrupted save never corrupts vault; last N backups restorable | Met (Phase 1) | ✓ |
 | Distribution | `pip install pwvault-manager` from PyPI; GUI in desktop app menu | `pwvault-manager` 1.3.0 published to PyPI 2026-11-05 | ✅ Met |
-| Security review | `/cso` finds no high-severity issues in changes | Phase 6: no supported findings (run 1793899968881-553cb096ceb6e924) | ✅ Met for Phase 6 |
+| Security review | `/cso` finds no high-severity issues in changes | Phases 6 and 7: no supported findings (runs 1793899968881-553cb096ceb6e924, 1793911242861-c63a7360f2ca517d) | ✅ Met for Phases 6–7 |
 
 ## Tech Stack / Tools
 
@@ -117,6 +117,7 @@ I can keep all my passwords in one encrypted local vault that I control, use it 
 | Packaging | setuptools (`pyproject.toml`) | Entry points `pwvault`, `pwvault-gui` |
 | CI | GitHub Actions (`.github/workflows/tests.yml`) | |
 | Legacy migration | `cryptography` >= 50.0.2 (optional extra) | `.pwv` → `.kdbx` only |
+| YubiKey | `yubikey-manager` >= 5.5 (optional extra) | HMAC-SHA1 challenge-response; needs pcsc-lite-devel to build pyscard |
 
 ## Links
 
@@ -126,4 +127,4 @@ I can keep all my passwords in one encrypted local vault that I control, use it 
 
 ---
 *Created: 2026-10-30*
-*Last updated: 2026-11-05 after Phase 6*
+*Last updated: 2026-11-05 after Phase 7*

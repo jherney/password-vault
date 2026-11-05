@@ -324,6 +324,7 @@ def challenge_response(yubikey: YubiKeySlot, challenge: bytes) -> bytes:
     prompted = []
 
     def keepalive(_status):
+        """Prompt for a YubiKey touch only on the first keepalive callback."""
         if not prompted:
             prompted.append(True)
             yubikey_touch_prompt()
@@ -379,6 +380,14 @@ def yubikey_transformed_key(params: dict, password, keyfile, yubikey: YubiKeySlo
     kind = ARGON2_KDFS.get(params.get("$UUID"))
     if kind is None or not params.get("S"):
         raise VaultError(YUBIKEY_NEEDS)
+    # From the file's header: a crafted file gets a clean error, not a crash. The salt is the
+    # challenge, and a YubiKey challenge holds at most 63 bytes plus padding.
+    if (not all(isinstance(params.get(k), int) and params[k] > 0 for k in ("I", "M", "P", "V"))
+            or params["M"] // 1024 < 8 * params["P"]
+            or params["V"] not in (0x10, 0x13)  # the only Argon2 versions
+            or not isinstance(params["S"], bytes)
+            or not 8 <= len(params["S"]) <= 63):
+        raise VaultError("vault file has invalid key-derivation settings")
     import argon2.low_level as argon2_ll  # pykeepass's own dependency
     response = challenge_response(yubikey, params["S"])
     raw = hashlib.sha256((hashlib.sha256(password.encode()).digest() if password is not None else b"")

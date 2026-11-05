@@ -11,27 +11,27 @@ about: "pwvault"
 See: .paul/PROJECT.md (updated 2026-11-05)
 
 **Core value:** I can keep all my passwords in one encrypted local vault that I control, use it from the terminal or a GUI, and still open it in KeePass-compatible apps.
-**Current focus:** v1.4 Daily-driver gaps — Phase 7 YubiKey unlock
+**Current focus:** v1.4 Daily-driver gaps — Phase 8 Offline breach check
 
 ## Current Position
 
 Milestone: v1.4 Daily-driver gaps
-Phase: 7 of 6–9 (YubiKey unlock) — Applying
-Plan: 07-02 applying: tasks 1–2 done, GUI checkpoint (task 3) awaiting the user
-Status: APPLY in progress (full suite 229 OK; local CodeRabbit review: no code findings)
-Last activity: 2026-11-05 — 07-02 tasks done, committed on branch yubikey-gui for a PR review
+Phase: 8 of 6–9 (Offline breach check)
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-11-05 — Phase 7 complete (07-01, 07-02; /cso no supported findings), transitioned to Phase 8
 
 Progress:
 - v1.3 Hardening, TOTP, Backups & Release: [██████████] 100% ✓ (released 2026-11-05)
-- v1.4 Daily-driver gaps: [███▌░░░░░░] 37% (Phase 6 ✓, Phase 7 half)
-- Phase 7: [█████░░░░░] 50% (07-01 ✓, 07-02 GUI next)
+- v1.4 Daily-driver gaps: [█████░░░░░] 50% (Phases 6–7 ✓)
+- Phase 8: [░░░░░░░░░░] 0%
 
 ## Loop Position
 
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ✓        ◐        ○     [Applying: checkpoint pending]
+  ○        ○        ○     [Ready for first PLAN of Phase 8]
 ```
 
 ## Accumulated Context
@@ -49,6 +49,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | 2026-10-30: 04-01 checkpoint: fix F-01 (durable re-key purge), close F-07, complete the audit gaps; no critical/high findings, so no 04-02 fix plan for F-02–F-12 | Phase 4 | F-01 fixed in pwvault.py; F-11 and F-12 deferred to Phase 5 |
 | All vault writes go through `Vault._write()` (lock, conflict check, backup, atomic write, prune) | Phase 1 | New save paths get backups for free |
 | 2026-11-05: `pwvault merge` applies permanent deletions (KeePassXC Synchronize rules), unlike KeePassXC's default KeepNewer merge | Phase 6 | Interop test expects the same result as keepassxc-cli except for permanently deleted entries |
+| 2026-11-05: Phase 7 work goes through PR #6 (branch yubikey-gui) so CodeRabbit reviews it; its one finding fixed in 0579ff2 | Phase 7 | PR workflow available for later phases |
 | 2026-11-05: No YubiKey available (user, at 07-01 APPLY); the real-hardware checkpoint (AC-5) is deferred. KeePassXC compatibility is covered offline by KeePassXC's own YubiKey test vault and known answer; driver calls checked against yubikey-manager 5.9.2 source | Phase 7 | Driver never run against a device; first real-key use is the open item |
 | 2026-11-05: GUI merge changes the vault in memory; Save writes once, Discard/Escape/close reload from disk (no password prompt); lock drops it | Phase 6 | Pattern for later in-memory-then-confirm dialogs |
 | 2026-11-05: Every move stamps LocationChanged and every permanent delete writes DeletedObjects (pykeepass does neither) | Phase 6 | Moves and deletions made in pwvault carry over in merges here and in KeePassXC; deletions made with 1.3 or earlier were not recorded |
@@ -74,15 +75,33 @@ PLAN ──▶ APPLY ──▶ UNIFY
 ### Git State
 
 Last commit: 0a11adb (07-01 YubiKey CLI), pushed
-Branch: yubikey-gui (07-02, PR to main); main at 0a11adb
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:e9841dda2a74550f73982fab75c1c307505f91cc398034a64406db51443f9494 -->
+
+Branch: yubikey-gui (PR #6 merged; PR #7 open with follow-up fixes not yet on main); PR #6 merged as 54901f7
+
+<!-- /coderabbit-ai-generated:v1 -->
 Uncommitted: `.gstack/` and `pwvault.keyx` (both intentionally not committed)
 
 ## Session Continuity
 
 Last session: 2026-11-05
-Stopped at: 07-02 tasks 1–2 applied, GUI checkpoint pending
-Next action: user approves the 07-02 GUI checkpoint, then /paul:unify .paul/phases/07-yubikey-unlock/07-02-PLAN.md
-Resume file: .paul/phases/07-yubikey-unlock/07-02-PLAN.md
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:8908c822008441c828418c401ec0a8d6656eb03402883b28811b37243487860f -->
+
+Stopped at: Phase 7 complete; PR #6 merged, PR #7 follow-up fixes pending on main
+
+<!-- /coderabbit-ai-generated:v1 -->
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:abeec1f78900df88ce5ef101ef7623cc8715e4e1b2503384267878bcde1a04d9 -->
+
+Next action: incorporate PR #7 into main, then /paul:plan for Phase 8 (Offline breach check)
+
+<!-- /coderabbit-ai-generated:v1 -->
+Resume file: .paul/ROADMAP.md
 
 ---
 *STATE.md — Updated after every significant action*

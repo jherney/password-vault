@@ -14,7 +14,7 @@ Close the gaps that keep pwvault from being a daily-driver password manager, wit
 
 **v1.4 Daily-driver gaps** (v1.4.0)
 Status: 🚧 In progress
-Phases: 1 of 4 complete (25%)
+Phases: 2 of 4 complete (50%)
 
 Constraints for every phase:
 - Stays on pykeepass; no custom crypto, no new vault format. A vault written by any phase must still open in KeePassXC.
@@ -26,7 +26,7 @@ Constraints for every phase:
 | Phase | Name | Plans | Status | Completed |
 |-------|------|-------|--------|-----------|
 | 6 | Vault merge | 2/2 | ✅ Complete | 2026-11-05 |
-| 7 | YubiKey unlock | 1/2 | In progress | - |
+| 7 | YubiKey unlock | 2/2 | ✅ Complete | 2026-11-05 |
 | 8 | Offline breach check | TBD | Not started | - |
 | 9 | Browser autofill | TBD | Not started | - |
 
@@ -50,7 +50,7 @@ Constraints for every phase:
 - [x] 06-01: merge engine (UUID match, history, moves, DeletedObjects, attachments, icons), `pwvault merge` CLI, keepassxc-cli interop test
 - [x] 06-02: GUI Database > Merge another copy… dialog (preview, Save, Discard); `open_other_copy()` shared with the CLI
 
-### Phase 7: YubiKey unlock
+### Phase 7: YubiKey unlock ✅
 
 **Goal:** Unlock a vault with password + YubiKey HMAC-SHA1 challenge-response, in the same way KeePassXC does, so one vault works with the same key in both apps
 **Depends on:** Phase 6
@@ -64,7 +64,9 @@ Constraints for every phase:
 
 **Plans:**
 - [x] 07-01 (AC-5 hardware check deferred): YubiKey through all load/save paths, KeePassXC-compatible challenge-response (proven offline against KeePassXC's own YubiKey test vault), optional `yubikey-manager` driver, CLI `--yubikey`; real-key checkpoint
-- [ ] 07-02: GUI (unlock screen, change master key, merge dialog)
+- [x] 07-02: GUI (unlock/create screens with remembered slot, Change master key, Merge), touch prompt; PR #6 reviewed by CodeRabbit
+
+**Open item:** first use with a physical YubiKey and `keepassxc-cli -y` (07-01 AC-5)
 
 ### Phase 8: Offline breach check
 
@@ -102,4 +104,4 @@ Phases 1–5: safe saves and backups, TOTP codes, GUI polish, security review, p
 
 ---
 *Roadmap created: 2026-10-30*
-*Last updated: 2026-11-05 — Phase 6 complete*
+*Last updated: 2026-11-05 — Phase 7 complete*
