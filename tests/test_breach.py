@@ -6,6 +6,7 @@ Run: python3 -m unittest discover -s tests -p test_breach.py
 
 import gzip
 import hashlib
+import http.client
 import io
 import os
 import random
@@ -32,6 +33,10 @@ def sha1(password: str) -> str:
 
 def http_503():
     raise urllib.error.HTTPError(pwvault.PWNED_API + "0000A", 503, "busy", None, None)
+
+
+def truncated_reply():
+    raise http.client.IncompleteRead(b"0018A", 400)
 
 
 def same_prefix_other(password: str) -> str:
@@ -215,7 +220,7 @@ class DownloadTests(SmallRanges):
         self.assertEqual(self.store_files(), reversed_order)
 
     def test_bad_ranges_are_retried(self):
-        broken = iter([b"garbage\r\n", OSError("connection reset")])
+        broken = iter([b"garbage\r\n", OSError("connection reset"), http.client.IncompleteRead(b"", 10)])
 
         def flaky(prefix):
             if prefix == "00005":
@@ -236,6 +241,7 @@ class DownloadTests(SmallRanges):
             "empty": lambda: b"",
             "only padding": lambda: b"F" * 35 + b":0\r\n",
             "http error": http_503,
+            "truncated reply": truncated_reply,
         }
         for name, bad in cases.items():
             with self.subTest(name):
@@ -266,6 +272,22 @@ class DownloadTests(SmallRanges):
         self.import_hashes(self.all_hashes())
         self.assertEqual(self.store_files(), resumed)
         self.assertEqual(n, len(self.all_hashes()))
+
+    def test_failed_import_keeps_a_paused_download(self):
+        def interrupt_in_third_batch(prefix):
+            if prefix == "00013":
+                raise KeyboardInterrupt
+            return self.fetch(prefix)
+        with self.assertRaises(KeyboardInterrupt):
+            pwvault.update_breach_list(interrupt_in_third_batch)
+        bad = self.tmp / "bad.txt"
+        bad.write_text("not a hash\n")
+        for path, error in ((self.tmp / "missing.txt", OSError), (bad, VaultError)):
+            with self.subTest(path.name), self.assertRaises(error):
+                pwvault.import_breach_list(path)
+        self.fetched.clear()
+        pwvault.update_breach_list(self.fetch)
+        self.assertEqual(min(int(p, 16) for p in self.fetched), 16)  # the paused download resumed
 
     def test_a_crash_mid_batch_is_cut_back_on_resume(self):
         pwvault.update_breach_list(self.fetch)

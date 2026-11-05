@@ -83,7 +83,7 @@ All work is in one commit on branch `breach-check`, open as PR #8 into main.
 | File | Change | Purpose |
 |------|--------|---------|
 | `pwvault.py` | Modified (+~400 lines, nothing removed) | Breach store section, `check_vault`, `cmd_check`, `cmd_breach`, argparse entries |
-| `tests/test_breach.py` | Created (20 tests) | Store, download, resume, check and CLI tests, all offline |
+| `tests/test_breach.py` | Created (21 tests) | Store, download, resume, check and CLI tests, all offline |
 | `README.md` | Modified | "Checking for breached passwords" section and command table rows |
 | `CHANGELOG.md` | Modified | Unreleased entry |
 
@@ -116,6 +116,12 @@ All work is in one commit on branch `breach-check`, open as PR #8 into main.
 ### Cleanup after APPLY (this session)
 
 `/clean-code` pass before commit: lookup uses `bisect` instead of a hand-written search; `_BreachBuild._make_current()`, `_print_finding()` and `_print_breach_status()` split out; one `BreachStore.DAMAGED` message. It also fixed a file-descriptor leak when `BreachStore()` failed to open the index after opening the hashes file. Full suite passed afterwards (252 tests, 15 files, run per file).
+
+### Review fixes (CodeRabbit, PR #8)
+
+- A truncated reply (`http.client.IncompleteRead`, `BadStatusLine`) was not retried and stopped the whole download with a traceback; `_fetch_checked` now retries `http.client.HTTPException`. Tests: a truncated reply in `test_bad_ranges_are_retried` and `test_ranges_that_stay_bad_fail_the_update`.
+- A failed `breach import` (missing file or bad line) deleted a paused download's `partial/`; imports now build in `import-partial/`. Test: `test_failed_import_keeps_a_paused_download`.
+- Plan text corrected: cache dir for the store, 20 GB free, ~16 GB stored.
 
 ### Deferred Items
 

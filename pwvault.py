@@ -30,6 +30,7 @@ import gzip
 import hashlib
 import hmac
 import html
+import http.client
 import io
 import itertools
 import json
@@ -1556,8 +1557,8 @@ def migrate_legacy(old: Path, new: Path, password: str, keyfile=None) -> Vault:
 # (around 1 in 10^11 for the ~2.6 billion hashes HIBP had in 2026). Counts are not kept.
 #
 # Layout under breach_dir(): store-<stamp>/{hashes.bin,index.bin,meta.json}, a "current" symlink
-# to the live one, and partial/ while a build runs. A finished build is renamed and the symlink
-# swapped in one step, so a check never sees half a store.
+# to the live one, and partial/ (download) or import-partial/ (import) while a build runs. A
+# finished build is renamed and the symlink swapped in one step, so a check never sees half a store.
 
 PWNED_API = "https://api.pwnedpasswords.com/range/"
 PWNED_RANGES = 1 << 20  # 16^5 prefixes
@@ -1618,7 +1619,7 @@ def _fetch_checked(prefix: str, fetch) -> bytes:
             if not records:  # every real range holds hundreds of hashes
                 raise VaultError(f"range {prefix} came back empty")
             return records
-        except (OSError, VaultError) as e:  # urllib's errors are OSErrors
+        except (OSError, http.client.HTTPException, VaultError) as e:  # urllib's errors are OSErrors
             err = e
             if attempt < PWNED_TRIES - 1:
                 time.sleep(min(2 ** attempt, 30))
@@ -1626,11 +1627,12 @@ def _fetch_checked(prefix: str, fetch) -> bytes:
 
 
 class _BreachBuild:
-    """partial/ under construction: hashes.bin grows range by range and index.bin holds the
-    offsets of the ranges finished so far, so its length is the resume point."""
+    """A store under construction, in partial/ (download) or import-partial/ (import):
+    hashes.bin grows range by range and index.bin holds the offsets of the ranges finished so
+    far, so its length is the resume point."""
 
-    def __init__(self, root: Path, fresh: bool):
-        self.root, self.dir = root, root / "partial"
+    def __init__(self, root: Path, fresh: bool, name: str = "partial"):
+        self.root, self.dir = root, root / name
         if fresh and self.dir.exists():
             shutil.rmtree(self.dir)
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -1764,7 +1766,7 @@ def import_breach_list(path: Path, progress=None) -> int:
             yield b"".join(records)
             records, current = [], current + 1
 
-    build = _BreachBuild(root, fresh=True)
+    build = _BreachBuild(root, fresh=True, name="import-partial")  # never touches a paused download
     try:
         _check_free_space(root, 0)
         it = ranges()
