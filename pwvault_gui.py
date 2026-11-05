@@ -112,11 +112,13 @@ def read_theme_choice(path: Path | None = None) -> str:
 
 
 def write_theme_choice(choice: str, path: Path | None = None) -> None:
+    """Save the theme choice while preserving other settings."""
     write_setting("ui", "theme", choice, path)
 
 
 def _vault_key(vault_path) -> str:
     # A hash of the resolved path: INI keys can't hold every path, and the file needn't list them.
+    """Return a stable INI key from the resolved vault path without storing the path."""
     return hashlib.sha256(str(Path(vault_path).resolve()).encode()).hexdigest()[:32]
 
 
@@ -130,6 +132,7 @@ def remembered_yubikey(vault_path, path: Path | None = None):
 
 
 def remember_yubikey(vault_path, yubikey, path: Path | None = None) -> None:
+    """Save or clear the vault slot preference, ignoring settings write failures."""
     try:
         write_setting("yubikey", _vault_key(vault_path), str(yubikey.slot) if yubikey else None, path)
     except OSError:
@@ -141,6 +144,7 @@ def touch_prompt(label):
     """While a YubiKey may be challenged, show its touch prompt in label (drawn at once, since the
     wait blocks the Tk loop)."""
     def show():
+        """Draw the touch prompt immediately while the Tk event loop is blocked."""
         label.configure(text="Touch your YubiKey…", style="Muted.TLabel")
         label.update_idletasks()
     previous = pwvault.yubikey_touch_prompt
@@ -273,6 +277,7 @@ class YubiKeyField(ttk.Frame):
     CHOICES = ("No YubiKey", "YubiKey slot 1", "YubiKey slot 2")
 
     def __init__(self, master, value=None, **kw):
+        """Build a read-only slot selector initialized to the supplied YubiKey choice."""
         super().__init__(master, **kw)
         self.var = tk.StringVar()
         self.box = ttk.Combobox(self, textvariable=self.var, values=self.CHOICES, state="readonly", width=24)
@@ -280,13 +285,16 @@ class YubiKeyField(ttk.Frame):
         self.set(value)
 
     def get(self):
+        """Return the selected YubiKey slot, or None for no or unrecognized selection."""
         slot = self.CHOICES.index(self.var.get()) if self.var.get() in self.CHOICES else 0
         return pwvault.YubiKeySlot(slot) if slot else None
 
     def set(self, yubikey):
+        """Select the given YubiKey slot, or No YubiKey for None."""
         self.var.set(self.CHOICES[yubikey.slot if yubikey else 0])
 
     def enable(self, on: bool):
+        """Enable slot selection when on is true; otherwise disable the field."""
         self.box.configure(state="readonly" if on else "disabled")
 
 
@@ -500,6 +508,7 @@ class EntryDialog(Dialog):
         self.refresh_attachments()
 
     def save(self):
+        """Validate entry fields, apply edits or additions, and save the vault."""
         v = self.app.vault
         if v is None:
             return self.destroy()
@@ -618,6 +627,7 @@ class BackupsDialog(Dialog):
         self.show()
 
     def restore(self):
+        """Confirm and restore the selected backup, then lock for a fresh unlock."""
         sel = self.tree.selection()
         if not sel:
             return
@@ -644,6 +654,7 @@ class MergeDialog(Dialog):
     KINDS = (("added", "Added"), ("updated", "Updated"), ("moved", "Moved"), ("deleted", "Deleted"))
 
     def __init__(self, app):
+        """Build the merge dialog with shared or separate credentials and a results tree."""
         super().__init__(app, "Merge another copy")
         self.merged = False  # the open vault holds an unsaved merge
         self.other = tk.StringVar()
@@ -691,6 +702,7 @@ class MergeDialog(Dialog):
             self.other.set(path)
 
     def toggle_credentials(self):
+        """Enable separate credentials only when shared credentials are unchecked."""
         state = "disabled" if self.same.get() else "normal"
         for field in (self.pw_field, self.keyfile):
             for w in field.winfo_children():
@@ -698,6 +710,7 @@ class MergeDialog(Dialog):
         self.yubikey.enable(not self.same.get())
 
     def merge(self):
+        """Open the selected copy and merge in memory, showing errors or a change report."""
         if self.merged or self.app.vault is None:
             return
         path = self.other.get().strip()
@@ -803,6 +816,7 @@ class GeneratorDialog(Dialog):
         self.show()
 
     def regen(self):
+        """Generate a password from the selected options, displaying validation errors."""
         try:
             n = max(pwvault.MIN_GENERATED_LEN, min(128, int(self.length.get())))
         except (tk.TclError, ValueError):
@@ -816,6 +830,7 @@ class GeneratorDialog(Dialog):
 
 class ChangeMasterDialog(Dialog):
     def __init__(self, app):
+        """Build the master-key dialog with the current key file and YubiKey selection."""
         super().__init__(app, "Change master key")
         b = self.body
         self.cur, self.new, self.confirm = tk.StringVar(), tk.StringVar(), tk.StringVar()
@@ -844,6 +859,7 @@ class ChangeMasterDialog(Dialog):
         self.show()
 
     def apply(self):
+        """Verify the current password, save the new master key, and remember its slot."""
         if self.new.get() != self.confirm.get():
             return self.err.configure(text="New passwords don't match.", style="Error.TLabel")
         new_yubikey = self.yubikey.get()
@@ -1022,6 +1038,7 @@ class App:
     # ---------------------------------------------------------- unlock / create / migrate screen
 
     def show_unlock(self, msg=""):
+        """Show the unlock, creation, or legacy migration form for the current vault path."""
         self.root.title(f"pwvault — {self.path.name}")
         migrating = (not self.path.exists() and self.path == pwvault.DEFAULT_VAULT
                      and pwvault.LEGACY_VAULT.exists())
@@ -1062,6 +1079,7 @@ class App:
         ttk.Label(box, text=str(self.path), style="Muted.TLabel", font=("Sans", 8)).pack(side="bottom")
 
         def submit(_e=None):
+            """Open, create, or migrate the vault and clear passwords before showing entries."""
             p = pw.get()
             kf = None if migrating else keyfile.get()
             yk = None if migrating else yubikey.get()
@@ -1254,6 +1272,7 @@ class App:
             self.tree.see(f"e:{select.uuid}")
 
     def add_group(self):
+        """Prompt for a group name, add it outside the recycle bin, and save."""
         parent = self.selected_group()
         if self.vault.in_recycle_bin(parent):
             return messagebox.showinfo("New group", "Pick a group outside the recycle bin.", parent=self.root)
@@ -1269,6 +1288,7 @@ class App:
             self.show_group(group)
 
     def rename_group(self):
+        """Prompt for a new group name and save the validated rename."""
         group = self.selected_group()
         name = simpledialog.askstring("Rename group", "New name:", initialvalue=group.name, parent=self.root)
         if not name or self.vault is None:
@@ -1281,6 +1301,7 @@ class App:
             self.refresh_groups()
 
     def delete_group(self):
+        """Confirm recycling or permanent deletion of the selected group and save."""
         v, group = self.vault, self.selected_group()
         permanent = v.in_recycle_bin(group)
         question = (f"Permanently delete '{group.name}' and everything in it?\nThis cannot be undone." if permanent

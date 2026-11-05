@@ -324,6 +324,7 @@ def challenge_response(yubikey: YubiKeySlot, challenge: bytes) -> bytes:
     prompted = []
 
     def keepalive(_status):
+        """Prompt for a YubiKey touch only on the first keepalive callback."""
         if not prompted:
             prompted.append(True)
             yubikey_touch_prompt()
