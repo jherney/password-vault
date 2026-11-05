@@ -205,6 +205,16 @@ class YubiKeyVaultTests(Base):
         with self.assertRaisesRegex(VaultError, "needs a KDBX 4 vault with Argon2"):
             pwvault.yubikey_transformed_key(aes, PW, None, SLOT2)
 
+    def test_crafted_kdf_settings_give_a_clean_error(self):
+        # CSO hardening (Phase 7): header values come from the file being opened.
+        good = {"$UUID": bytes.fromhex("ef636ddf8c29444b91f7a9a403e30a0c"), "S": bytes(32),
+                "I": 2, "M": 1 << 20, "P": 1, "V": 19}
+        for bad in ({k: v for k, v in good.items() if k != "M"}, {**good, "P": 0},
+                    {**good, "S": bytes(64)}, {**good, "I": b"x"}):
+            with yubikey() as key, self.assertRaisesRegex(VaultError, "invalid key-derivation settings"):
+                pwvault.yubikey_transformed_key(bad, PW, None, SLOT2)
+            key.assert_not_called()  # rejected before the YubiKey is asked
+
     def test_vaults_without_a_yubikey_never_ask(self):
         with patch.object(pwvault, "challenge_response") as key:
             v = Vault.create(self.path, PW)

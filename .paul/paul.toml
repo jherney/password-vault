@@ -15,20 +15,18 @@ status = "in_progress"
 phases = 4
 
 [phase]
-number = 7
-name = "YubiKey unlock"
-status = "in_progress"
-plans_completed = 1
+number = 8
+name = "Offline breach check"
+status = "not_started"
+plans_completed = 0
 
 [loop]
-position = "APPLY"
-plan = "07-02"
-plan_path = "phases/07-yubikey-unlock/07-02-PLAN.md"
+position = "IDLE"
 
 [satellite]
 groom = true
 
 [stats]
-total_plans = 7
+total_plans = 8
 total_phases = 9
-last_activity = "2026-11-05T20:40:00-04:00"
+last_activity = "2026-11-05T23:30:00-04:00"
