@@ -49,7 +49,7 @@ from pykeepass import PyKeePass
 from pykeepass.exceptions import CredentialsError, PayloadChecksumError
 from pykeepass.pykeepass import BLANK_DATABASE_LOCATION, BLANK_DATABASE_PASSWORD
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 DATA_DIR = Path.home() / ".local/share/pwvault"
 DEFAULT_VAULT = Path(os.environ.get("PWVAULT_PATH", DATA_DIR / "vault.kdbx"))

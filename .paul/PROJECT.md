@@ -97,7 +97,7 @@ I can keep all my passwords in one encrypted local vault that I control, use it 
 | CI test suite | All existing + new tests pass | 141 passing (last full run) | On track |
 | TOTP interoperability | Codes match KeePassXC for same entry | RFC vectors + phone check pass; real KeePassXC not run here | Met (partial evidence) |
 | Save safety | Failed/interrupted save never corrupts vault; last N backups restorable | Met (Phase 1) | ✓ |
-| Distribution | `pip install pwvault` from PyPI; GUI in desktop app menu | - | Not started |
+| Distribution | `pip install pwvault-manager` from PyPI; GUI in desktop app menu | 1.3.0 wheel builds and installs clean; not yet published | In progress |
 | Security review | `/cso` finds no high-severity issues in changes | - | Not started |
 
 ## Tech Stack / Tools

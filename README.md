@@ -143,6 +143,21 @@ python3 -m unittest discover -s tests
 
 The GUI tests need a display. Without one they're skipped; on a headless machine, run them with `xvfb-run -a python3 -m unittest discover -s tests`. The full suite takes about a minute, because each vault creation runs Argon2. GitHub Actions runs the whole suite, GUI tests included, on Python 3.10 to 3.13 for every push and pull request.
 
+## Install from PyPI
+
+```bash
+pip install pwvault-manager        # the command is still `pwvault` and `pwvault-gui`
+pwvault-gui --install-launcher     # optional: add pwvault to the desktop app menu
+```
+
+## Dependencies
+
+`requirements.txt` lists what pwvault needs. `requirements.lock` pins every package, with hashes, for all supported Python versions. CI installs from it with `pip install --require-hashes -r requirements.lock`. To update it after editing `requirements.txt`, run:
+
+```bash
+uv pip compile requirements.txt --universal --python-version 3.10 --generate-hashes --output-file requirements.lock
+```
+
 ## Project layout
 
 | File | Purpose |
