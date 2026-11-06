@@ -26,7 +26,6 @@ import concurrent.futures
 import csv
 import fcntl
 import getpass
-import gzip
 import hashlib
 import hmac
 import html
@@ -1556,7 +1555,10 @@ def migrate_legacy(old: Path, new: Path, password: str, keyfile=None) -> Vault:
 # each range starts. That is 68 bits per hash, so a false match is about N / 2^68 per password
 # (around 1 in 10^11 for the ~2.6 billion hashes HIBP had in 2026). Counts are not kept.
 #
-# Layout under breach_dir(): store-<stamp>/{hashes.bin,index.bin,meta.json}, a "current" symlink
+# Corruption is caught rather than answered wrongly: meta.json holds the SHA-256 of index.bin
+# (checked on open) and crc.bin a CRC32 of each range's records (checked on every lookup).
+#
+# Layout under breach_dir(): store-<stamp>/{hashes.bin,index.bin,crc.bin,meta.json}, a "current" symlink
 # to the live one, and partial/ (download) or import-partial/ (import) while a build runs. A
 # finished build is renamed and the symlink swapped in one step, so a check never sees half a store.
 
@@ -1566,8 +1568,10 @@ PWNED_RECORD = 6  # bytes kept per hash after the 5-hex prefix
 PWNED_BATCH = 4096  # ranges fetched, written and fsynced together; a resume restarts here
 PWNED_WORKERS = 16
 PWNED_TRIES = 5
+PWNED_MAX_RANGE = 4 << 20  # a real range is ~100 KB; a far larger reply is refused, not buffered
 PWNED_MIN_FREE = 20 << 30  # the full list is ~16 GB in this format (~2,500 hashes per range)
-PWNED_FORMAT = 1
+PWNED_FORMAT = 2  # 2 added crc.bin and meta's index_sha256
+PWNED_INDEX_MARGIN = 64 << 20  # index.bin (8 MB) and crc.bin (4 MB), with room to spare
 _PWNED_RANGE_LINE = re.compile(rb"([0-9A-F]{35}):(\d+)")
 _PWNED_FILE_LINE = re.compile(rb"([0-9A-F]{40}):(\d+)")
 
@@ -1602,13 +1606,37 @@ def fetch_range(prefix: str) -> bytes:
     req = urllib.request.Request(PWNED_API + prefix, headers={
         "User-Agent": f"pwvault-manager/{__version__}", "Accept-Encoding": "gzip"})
     with urllib.request.urlopen(req, timeout=30) as r:
-        body, encoding = r.read(), r.headers.get("Content-Encoding", "")
+        body, encoding = r.read(PWNED_MAX_RANGE + 1), r.headers.get("Content-Encoding", "")
+        declared = r.headers.get("Content-Length")
+    too_large = VaultError(f"range {prefix} is far larger than any real range")
+    if len(body) > PWNED_MAX_RANGE:  # before gunzip: a cut could fall between gzip members
+        raise too_large
+    # http.client returns a reply cut short by a closed connection without an error.
+    if declared is not None and (not declared.isdigit() or len(body) != int(declared)):
+        raise VaultError(f"range {prefix} arrived incomplete")
     if encoding == "gzip":
-        try:
-            return gzip.decompress(body)
-        except (OSError, EOFError, zlib.error):
-            raise VaultError(f"range {prefix} arrived damaged")
+        body = _gunzip_capped(body, prefix)
+    if len(body) > PWNED_MAX_RANGE:
+        raise too_large
     return body
+
+
+def _gunzip_capped(data: bytes, prefix: str) -> bytes:
+    """Every gzip member in data (a reply may hold several, as gzip.decompress allows), stopping
+    once the text passes PWNED_MAX_RANGE. A cut-off or corrupt member is an error."""
+    out = b""
+    while data and len(out) <= PWNED_MAX_RANGE:
+        member = zlib.decompressobj(wbits=31)  # gzip framing
+        try:
+            out += member.decompress(data, PWNED_MAX_RANGE + 1 - len(out))
+        except zlib.error:
+            raise VaultError(f"range {prefix} arrived damaged")
+        if len(out) > PWNED_MAX_RANGE:
+            break  # the caller refuses it as too large
+        if not member.eof:
+            raise VaultError(f"range {prefix} arrived damaged")
+        data = member.unused_data
+    return out
 
 
 def _fetch_checked(prefix: str, fetch) -> bytes:
@@ -1629,29 +1657,34 @@ def _fetch_checked(prefix: str, fetch) -> bytes:
 class _BreachBuild:
     """A store under construction, in partial/ (download) or import-partial/ (import):
     hashes.bin grows range by range and index.bin holds the offsets of the ranges finished so
-    far, so its length is the resume point."""
+    far, so its length is the resume point. crc.bin holds one CRC32 per finished range."""
 
     def __init__(self, root: Path, fresh: bool, name: str = "partial"):
         self.root, self.dir = root, root / name
         if fresh and self.dir.exists():
             shutil.rmtree(self.dir)
         self.dir.mkdir(parents=True, exist_ok=True)
-        hashes, index = self.dir / "hashes.bin", self.dir / "index.bin"
+        hashes, index, crc = self.dir / "hashes.bin", self.dir / "index.bin", self.dir / "crc.bin"
         offsets = index.read_bytes() if index.exists() else b""
         offsets = offsets[:len(offsets) // 8 * 8] or struct.pack("<Q", 0)
         if len(offsets) // 8 - 1 > PWNED_RANGES:
             offsets = struct.pack("<Q", 0)
+        # A range counts as finished only if its CRC was recorded too.
+        crcs_done = crc.stat().st_size // 4 if crc.exists() else 0
+        offsets = offsets[:8 * (min(len(offsets) // 8 - 1, crcs_done) + 1)]
         self.done = len(offsets) // 8 - 1
         self.total = struct.unpack_from("<Q", offsets, len(offsets) - 8)[0]
-        for path in (hashes, index):
+        for path in (hashes, index, crc):
             path.touch()
-        self._hashes, self._index = open(hashes, "r+b"), open(index, "r+b")
+        self._hashes, self._index, self._crc = open(hashes, "r+b"), open(index, "r+b"), open(crc, "r+b")
         # Anything past the last recorded offset came from a batch that didn't finish.
         self._hashes.truncate(self.total * PWNED_RECORD)
         self._hashes.seek(0, os.SEEK_END)
         self._index.truncate(len(offsets))
         self._index.seek(0)
         self._index.write(offsets)
+        self._crc.truncate(self.done * 4)
+        self._crc.seek(0, os.SEEK_END)
 
     @property
     def size(self) -> int:
@@ -1659,16 +1692,17 @@ class _BreachBuild:
 
     def append(self, ranges) -> None:
         """Add the next ranges' records, then make them durable before recording them done."""
-        offsets = []
+        offsets, crcs = [], []
         for records in ranges:
             self._hashes.write(records)
             self.total += len(records) // PWNED_RECORD
             offsets.append(self.total)
-        self._hashes.flush()
-        os.fsync(self._hashes.fileno())
-        self._index.write(struct.pack(f"<{len(offsets)}Q", *offsets))
-        self._index.flush()
-        os.fsync(self._index.fileno())
+            crcs.append(zlib.crc32(records))
+        _sync(self._hashes)
+        self._crc.write(struct.pack(f"<{len(crcs)}I", *crcs))
+        _sync(self._crc)
+        self._index.write(struct.pack(f"<{len(offsets)}Q", *offsets))  # last: this marks them done
+        _sync(self._index)
         self.done += len(offsets)
 
     def finish(self, source: str) -> int:
@@ -1676,6 +1710,7 @@ class _BreachBuild:
             raise VaultError(f"breach list incomplete ({self.done} of {PWNED_RANGES} ranges)")
         self.close()
         meta = {"format": PWNED_FORMAT, "source": source, "hashes": self.total,
+                "index_sha256": _file_sha256(self.dir / "index.bin"),
                 "completed": datetime.now(timezone.utc).isoformat(timespec="seconds")}
         with open(self.dir / "meta.json", "w") as f:
             json.dump(meta, f)
@@ -1703,15 +1738,29 @@ class _BreachBuild:
             os.close(fd)
 
     def close(self) -> None:
-        self._hashes.close()
-        self._index.close()
+        for f in (self._hashes, self._index, self._crc):
+            f.close()
 
 
-def _check_free_space(root: Path, already: int) -> None:
+def _sync(f) -> None:
+    f.flush()
+    os.fsync(f.fileno())
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _check_free_space(root: Path, already: int, needed: int | None = None) -> None:
+    needed = PWNED_MIN_FREE if needed is None else needed
     free = shutil.disk_usage(root).free
-    if free + already < PWNED_MIN_FREE:
-        need = (PWNED_MIN_FREE - already) / (1 << 30)
-        raise VaultError(f"the breach list needs about {need:.0f} GB free in {root} "
+    if free + already < needed:
+        need = (needed - already) / (1 << 30)
+        raise VaultError(f"the breach list needs about {need:.2g} GB free in {root} "
                          f"({free / (1 << 30):.1f} GB free)")
 
 
@@ -1768,7 +1817,8 @@ def import_breach_list(path: Path, progress=None) -> int:
 
     build = _BreachBuild(root, fresh=True, name="import-partial")  # never touches a paused download
     try:
-        _check_free_space(root, 0)
+        # The store is far smaller than its HASH:COUNT text (6 bytes per ~45-byte line).
+        _check_free_space(root, 0, min(PWNED_MIN_FREE, Path(path).stat().st_size + PWNED_INDEX_MARGIN))
         it = ranges()
         for _ in range(0, PWNED_RANGES, PWNED_BATCH):
             build.append(itertools.islice(it, PWNED_BATCH))
@@ -1780,9 +1830,11 @@ def import_breach_list(path: Path, progress=None) -> int:
 
 
 class BreachStore:
-    """The live breach list, read in place: a lookup reads two index entries and one range."""
+    """The live breach list, read in place: a lookup reads two index entries, that range's CRC and
+    the range. A store that fails a check raises VaultError rather than answering wrongly."""
 
     DAMAGED = "the breach list is damaged — run `pwvault breach update`"
+    OUTDATED = "the breach list is from an older version of pwvault — run `pwvault breach update`"
 
     def __init__(self, root: Path | None = None):
         root = root or breach_dir()
@@ -1790,17 +1842,32 @@ class BreachStore:
             raise VaultError("no breach list yet — run `pwvault breach update`")
         store = Path(os.path.realpath(root / "current"))  # resolve once: a later swap can't mix stores
         try:
-            self.meta = json.loads((store / "meta.json").read_text())
-            self._hashes = os.open(store / "hashes.bin", os.O_RDONLY)
-            self._index = os.open(store / "index.bin", os.O_RDONLY)
+            problem = self._open(store)
         except (OSError, ValueError):
+            problem = self.DAMAGED
+        if problem:
             self.close()
-            raise VaultError(self.DAMAGED)
-        if (not isinstance(self.meta, dict) or self.meta.get("format") != PWNED_FORMAT
-                or os.fstat(self._index).st_size != (PWNED_RANGES + 1) * 8
-                or os.fstat(self._hashes).st_size != self.meta.get("hashes", -1) * PWNED_RECORD):
-            self.close()
-            raise VaultError(self.DAMAGED)
+            raise VaultError(problem)
+
+    def _open(self, store: Path) -> str | None:
+        """Read meta.json, then open and check the data files. Why this store can't be used, or None."""
+        meta = self.meta = json.loads((store / "meta.json").read_text())
+        if not isinstance(meta, dict):
+            return self.DAMAGED
+        if meta.get("format") == 1:  # checked first: format 1 has no crc.bin to open
+            return self.OUTDATED
+        hashes = meta.get("hashes")
+        if meta.get("format") != PWNED_FORMAT or type(hashes) is not int or hashes < 0:
+            return self.DAMAGED
+        self._hashes = os.open(store / "hashes.bin", os.O_RDONLY)
+        self._index = os.open(store / "index.bin", os.O_RDONLY)
+        self._crc = os.open(store / "crc.bin", os.O_RDONLY)
+        if (os.fstat(self._index).st_size != (PWNED_RANGES + 1) * 8
+                or os.fstat(self._crc).st_size != PWNED_RANGES * 4
+                or os.fstat(self._hashes).st_size != hashes * PWNED_RECORD
+                or _file_sha256(store / "index.bin") != meta.get("index_sha256")):
+            return self.DAMAGED
+        return None
 
     def contains(self, password: str) -> bool:
         digest = hashlib.sha1(password.encode()).digest()  # HIBP hashes the UTF-8 password
@@ -1808,7 +1875,11 @@ class BreachStore:
         r = bits >> (8 * PWNED_RECORD)
         key = (bits & ((1 << (8 * PWNED_RECORD)) - 1)).to_bytes(PWNED_RECORD, "big")
         lo, hi = struct.unpack("<QQ", os.pread(self._index, 16, r * 8))
-        data = os.pread(self._hashes, (hi - lo) * PWNED_RECORD, lo * PWNED_RECORD)
+        data = os.pread(self._hashes, max(hi - lo, 0) * PWNED_RECORD, lo * PWNED_RECORD)
+        (crc,) = struct.unpack("<I", os.pread(self._crc, 4, r * 4))
+        if hi < lo or len(data) != (hi - lo) * PWNED_RECORD or zlib.crc32(data) != crc:
+            raise VaultError(self.DAMAGED)
+
         def record_at(i):
             return data[i * PWNED_RECORD:(i + 1) * PWNED_RECORD]
         count = len(data) // PWNED_RECORD
@@ -1816,10 +1887,11 @@ class BreachStore:
         return i < count and record_at(i) == key
 
     def close(self) -> None:
-        for fd in (getattr(self, "_hashes", None), getattr(self, "_index", None)):
+        for name in ("_hashes", "_index", "_crc"):
+            fd = getattr(self, name, None)
             if fd is not None:
                 os.close(fd)
-        self._hashes = self._index = None
+            setattr(self, name, None)
 
     def __enter__(self):
         return self
@@ -2113,22 +2185,18 @@ def cmd_trash(args):
 
 def cmd_check(args):
     vault = unlock(args)
-    try:
-        store, note = BreachStore(), None
+    try:  # a store that turns out damaged mid-check is reported like a missing one
+        with BreachStore() as store:
+            findings, note = check_vault(vault, store), None
     except VaultError as e:
-        store, note = None, str(e)
-    try:
-        findings = check_vault(vault, store)
-    finally:
-        if store:
-            store.close()
+        findings, note = check_vault(vault), str(e)
     for f in findings:
         _print_finding(vault, f)
     count = {i: sum(i in f.issues for f in findings) for i in ("breached", "reused", "weak")}
     checked = len(checked_entries(vault))
     print(f"\n{len(findings)} of {checked} entr{'y' if checked == 1 else 'ies'} flagged"
           + (f" ({count['breached']} breached, {count['reused']} reused, {count['weak']} weak)" if findings else ""))
-    if store is None:
+    if note:
         print(f"Breached passwords not checked: {note}")
 
 

@@ -11,27 +11,27 @@ about: "pwvault"
 See: .paul/PROJECT.md (updated 2026-11-05)
 
 **Core value:** I can keep all my passwords in one encrypted local vault that I control, use it from the terminal or a GUI, and still open it in KeePass-compatible apps.
-**Current focus:** v1.4 Daily-driver gaps — Phase 8 Offline breach check
+**Current focus:** v1.4 Daily-driver gaps — Phase 9 Browser autofill
 
 ## Current Position
 
 Milestone: v1.4 Daily-driver gaps
-Phase: 8 of 6–9 (Offline breach check) — In progress (2 of 3 plans)
-Plan: 08-02 complete; 08-03 (phase /cso) not yet planned
-Status: Loop closed, ready for next PLAN
-Last activity: 2026-11-05 — Unified 08-02 (.paul/phases/08-breach-check/08-02-SUMMARY.md)
+Phase: 9 of 6–9 (Browser autofill) — Not started
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-11-05 — Phase 8 complete (08-03 unified), transitioned to Phase 9
 
 Progress:
 - v1.3 Hardening, TOTP, Backups & Release: [██████████] 100% ✓ (released 2026-11-05)
-- v1.4 Daily-driver gaps: [█████░░░░░] 50% (Phases 6–7 ✓)
-- Phase 8: [███████░░░] 67% (08-01, 08-02 ✓)
+- v1.4 Daily-driver gaps: [████████░░] 75% (Phases 6–8 ✓)
+- Phase 9: [░░░░░░░░░░] 0%
 
 ## Loop Position
 
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ✓        ✓        ✓     [Loop complete - ready for next PLAN]
+  ○        ○        ○     [Ready for first PLAN]
 ```
 
 ## Accumulated Context
@@ -55,6 +55,8 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | 2026-11-05: Phase 8 in two plans (08-01 store + CLI, 08-02 GUI); breach store keeps 6-byte hash suffixes, no counts (~16 GB for ~2.6 billion hashes) | Phase 8 | Reports "found in breaches" only; ~1 in 10^11 false-match odds |
 | 2026-11-05: Breach list lives in `$XDG_CACHE_HOME/pwvault/pwned` (re-downloadable), made live by an atomic `current` symlink swap; 08-01 AC-5 (real download) deferred by the user | Phase 8 | 08-02 reuses `check_vault()`; first real download is an open item |
 | 2026-11-05: Phase 8 split into three plans: 08-02 GUI report (double-click closes it and selects the entry in the main window), 08-03 phase /cso | Phase 8 | /cso reviews 08-01 and 08-02 together |
+| 2026-11-05: Breach store format 2: SHA-256 of index.bin checked on open, CRC32 per range checked on lookup; format 1 reported as outdated (no migration, no real store exists). 08-03 also fixes the note and import free-space leftovers | Phase 8 | A damaged list is reported instead of missing breaches |
+| 2026-11-05: 08-03 checkpoint: Phase 8 /cso (run 1793923911466-61bf8128ec79c1c7, partial: no scanners, sequential challenge) accepted with no supported findings; download replies capped at 4 MB as hardening | Phase 8 | Phase 8 can close; scanner coverage is a gap to revisit |
 | 2026-11-05: Every move stamps LocationChanged and every permanent delete writes DeletedObjects (pykeepass does neither) | Phase 6 | Moves and deletions made in pwvault carry over in merges here and in KeePassXC; deletions made with 1.3 or earlier were not recorded |
 
 ### Deferred Issues
@@ -66,7 +68,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 - Phase 3: a stray untracked `pwvault.keyx` (32 bytes) appeared in the repo root during a test run at 21:51; source not identified (not reproduced in a later full run); `*.keyx` is now git-ignored
 - Phase 7 (07-01): AC-5 real-YubiKey check with keepassxc-cli -y; `[yubikey]` extra needs pcsc-lite-devel to build pyscard
 - Phase 8 (08-01): AC-5 real `pwvault breach update` against the HIBP API (with a Ctrl+C and resume), `breach status`, and `check` on the real vault
-- Phase 8 (08-02): no-list note shows the shared error's literal backticks and wraps mid-command (approved as-is); `breach import` applies the 20 GB free-space floor to small files
+- Phase 8 (08-03): Phase 8 /cso ran without scanners (gitleaks, OSV, semgrep) and with a sequential challenge; run `gstack-cso doctor` and a scanner pass before a release
 - Phase 6 (06-01): deletions made with pwvault ≤ 1.3 not recorded (reappear on first merge); Meta HistoryMaxItems/HistoryMaxSize not read; database CustomData not merged (revisit in Phase 9); KDBX3↔4 time re-encoding untested
 - Phase 4 (04-01): F-15 no lock file for dependencies; deferred to Phase 5 before any publish workflow. CI pins (F-11) and dependency minimums (F-12, F-14) fixed after the second CSO run
 
@@ -80,16 +82,15 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 ### Git State
 
-Last commit: bfc73a5 (merge of PR #8: 08-01 breach check + review fixes), on main, pushed; breach-check deleted
-Branch breach-gui: 08-02 work uncommitted
+Last commit: Phase 8 close-out on branch breach-integrity (08-03), not yet pushed; main at 3b0d2ce (PR #9)
 Uncommitted: `.gstack/` and `pwvault.keyx` (both intentionally not committed)
 
 ## Session Continuity
 
 Last session: 2026-11-05
-Stopped at: 08-02 unified (loop closed)
-Next action: commit 08-02 on breach-gui (PR), then /paul:plan for 08-03 (phase /cso)
-Resume file: .paul/phases/08-breach-check/08-02-SUMMARY.md
+Stopped at: Phase 8 complete, ready to plan Phase 9
+Next action: push breach-integrity and open its PR; then /paul:plan for Phase 9 (browser autofill)
+Resume file: .paul/ROADMAP.md
 
 ---
 *STATE.md — Updated after every significant action*

@@ -48,15 +48,15 @@ I can keep all my passwords in one encrypted local vault that I control, use it 
 - ✓ PyPI release `pwvault-manager` 1.3.0 and desktop launcher — Phase 5
 - ✓ Merge two copies of a vault, KeePassXC-compatible (UUID match, history, moves, recycle bin, permanent deletions): `pwvault merge` and GUI Database > Merge another copy… — Phase 6
 - ✓ Permanent deletes recorded in DeletedObjects and moves stamp LocationChanged, so they carry over in merges here and in KeePassXC — Phase 6
+- ✓ Offline check for breached, reused and weak passwords: local HIBP Pwned Passwords store (resumable download or import, ~16 GB, integrity-checked), `pwvault check`, `pwvault breach update|import|status`, GUI Database > Check passwords…; no network use during a check — Phase 8
 - ✓ YubiKey HMAC-SHA1 challenge-response as part of the master key, KeePassXC-compatible (CLI `--yubikey`, GUI slot choice remembered per vault); proven against KeePassXC's own YubiKey test vault, not yet with a physical key — Phase 7
 
 ### Active (In Progress)
 
-- v1.4 Daily-driver gaps: Phase 8 offline breach check is next
+- v1.4 Daily-driver gaps: Phase 9 browser autofill is next
 
 ### Planned (Next)
 
-- Phase 8: offline breach check (HIBP hash list)
 - Phase 9: browser autofill (WebExtension + native messaging)
 
 ### Out of Scope
@@ -95,16 +95,18 @@ I can keep all my passwords in one encrypted local vault that I control, use it 
 | Every vault write goes through `Vault._write()` | One place for lock, conflict check, backup and atomic write | 2026-10-30 | Active |
 | Theme follows the desktop by default; in-app override saved outside the vault and applied live | Keeps vault format unchanged; the user asked for a control, then for it to apply immediately | 2026-10-30 | Active |
 | Restore via `Vault.restore()` only, after confirmation | One verified path; GUI never copies backup files | 2026-10-30 | Active |
+| Breach check is offline only: the whole HIBP list is downloaded once (every range, same for everyone) and checked locally; no k-anonymity lookups | No password, hash or prefix leaves the machine because of a check | 2026-11-05 | Active |
+| Breach list is a cache (`$XDG_CACHE_HOME`), 68 bits per hash, no counts, integrity-checked (index SHA-256, per-range CRC32); damage is reported, never answered | ~16 GB instead of ~40; a corrupted cache can't hide breaches | 2026-11-05 | Active |
 
 ## Success Metrics
 
 | Metric | Target | Current | Status |
 |--------|--------|---------|--------|
-| CI test suite | All existing + new tests pass | 230 passing (last full run 229 + regression tests, 2026-11-05) | On track |
+| CI test suite | All existing + new tests pass | 267 passing (per-file runs, 2026-11-05) | On track |
 | TOTP interoperability | Codes match KeePassXC for same entry | RFC vectors + phone check pass; real KeePassXC not run here | Met (partial evidence) |
 | Save safety | Failed/interrupted save never corrupts vault; last N backups restorable | Met (Phase 1) | ✓ |
 | Distribution | `pip install pwvault-manager` from PyPI; GUI in desktop app menu | `pwvault-manager` 1.3.0 published to PyPI 2026-11-05 | ✅ Met |
-| Security review | `/cso` finds no high-severity issues in changes | Phases 6 and 7: no supported findings (runs 1793899968881-553cb096ceb6e924, 1793911242861-c63a7360f2ca517d) | ✅ Met for Phases 6–7 |
+| Security review | `/cso` finds no high-severity issues in changes | Phases 6, 7 and 8: no supported findings (runs 1793899968881-553cb096ceb6e924, 1793911242861-c63a7360f2ca517d, 1793923911466-61bf8128ec79c1c7; Phase 8 run partial: no scanners) | ✅ Met for Phases 6–8 |
 
 ## Tech Stack / Tools
 
@@ -127,4 +129,4 @@ I can keep all my passwords in one encrypted local vault that I control, use it 
 
 ---
 *Created: 2026-10-30*
-*Last updated: 2026-11-05 after Phase 7*
+*Last updated: 2026-11-05 after Phase 8*

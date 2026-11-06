@@ -15,10 +15,10 @@ status = "in_progress"
 phases = 4
 
 [phase]
-number = 8
-name = "Offline breach check"
-status = "in_progress"
-plans_completed = 2
+number = 9
+name = "Browser autofill"
+status = "not_started"
+plans_completed = 0
 
 [loop]
 position = "IDLE"
@@ -27,6 +27,6 @@ position = "IDLE"
 groom = true
 
 [stats]
-total_plans = 10
+total_plans = 11
 total_phases = 9
-last_activity = "2026-11-05T19:22:32-04:00"
+last_activity = "2026-11-05T20:21:39-04:00"

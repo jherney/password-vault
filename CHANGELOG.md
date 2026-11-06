@@ -11,6 +11,7 @@ All notable changes to pwvault. The format follows [Keep a Changelog](https://ke
 - GUI: Database > Merge another copy… shows every change from the other copy, then saves the merge (with a backup) or discards it.
 - `pwvault check` lists entries whose passwords are breached, reused or weak, entirely offline. Breaches come from a local copy of Have I Been Pwned's Pwned Passwords list: `pwvault breach update` downloads it (resumable, stored compactly in `~/.cache/pwvault/pwned/`), `breach import FILE` builds it from an existing hash file, `breach status` shows it.
 - GUI: Database > Check passwords… shows the same report; double-click an entry to jump to it in the main window.
+- The breach list detects damage: a SHA-256 of its index is checked on open and a CRC32 of each range on every lookup, so a corrupted list is reported instead of missing breaches.
 
 ### Changed
 - GUI error messages keep their capitals (file paths and names like YubiKey were shown lowercased).

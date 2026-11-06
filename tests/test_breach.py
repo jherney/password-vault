@@ -10,6 +10,9 @@ import http.client
 import io
 import os
 import random
+import re
+import shutil
+import struct
 import sys
 import tempfile
 import unittest
@@ -65,7 +68,7 @@ class BreachBase(unittest.TestCase):
 
     def store_files(self) -> dict:
         live = Path(os.path.realpath(pwvault.breach_dir() / "current"))
-        return {n: (live / n).read_bytes() for n in ("hashes.bin", "index.bin")}
+        return {n: (live / n).read_bytes() for n in ("hashes.bin", "index.bin", "crc.bin")}
 
 
 class SmallRanges(BreachBase):
@@ -127,7 +130,7 @@ class StoreTests(BreachBase):
             return real(fd, n, offset)
         with BreachStore() as store, patch.object(pwvault.os, "pread", pread):
             self.assertTrue(store.contains("password1"))
-        self.assertEqual(reads, [16, 2 * pwvault.PWNED_RECORD])  # two offsets, then this range's 2 records
+        self.assertEqual(reads, [16, 2 * pwvault.PWNED_RECORD, 4])  # two offsets, this range's 2 records, its CRC
 
     def test_import_rejects_bad_or_unsorted_lines(self):
         low, high = sorted((sha1("a"), sha1("b")))
@@ -147,6 +150,64 @@ class StoreTests(BreachBase):
             f.write(b"x")
         with self.assertRaisesRegex(VaultError, "damaged"):
             BreachStore()
+
+    def live(self) -> Path:
+        return Path(os.path.realpath(pwvault.breach_dir() / "current"))
+
+    def patch_file(self, name, offset, data):
+        with open(self.live() / name, "r+b") as f:
+            f.seek(offset)
+            f.write(data)
+
+    def range_start(self, r) -> int:
+        return struct.unpack_from("<Q", (self.live() / "index.bin").read_bytes(), r * 8)[0]
+
+    def test_corruption_is_reported_not_answered(self):
+        r = int(sha1("password1")[:5], 16)
+        index_damage = {  # each makes the open fail: index.bin's SHA-256 or a size no longer matches
+            "offset emptying a range": lambda: self.patch_file(
+                "index.bin", r * 8, (self.live() / "index.bin").read_bytes()[(r + 1) * 8:(r + 2) * 8]),
+            "index hash in meta": lambda: (self.live() / "meta.json").write_text(
+                (self.live() / "meta.json").read_text().replace('"index_sha256": "', '"index_sha256": "0')),
+            "short crc.bin": lambda: os.truncate(self.live() / "crc.bin", 4 * pwvault.PWNED_RANGES - 4),
+        }
+        range_damage = {  # each makes a lookup in that range fail: its CRC no longer matches
+            "flipped record byte": lambda: self.patch_file("hashes.bin", self.range_start(r) * pwvault.PWNED_RECORD, b"\xff"),
+            "altered range CRC": lambda: self.patch_file("crc.bin", r * 4, b"\x00\x00\x00\x01"),
+        }
+        for name, damage in {**index_damage, **range_damage}.items():
+            with self.subTest(name):
+                shutil.rmtree(pwvault.breach_dir(), ignore_errors=True)
+                self.import_hashes([sha1("password1"), sha1("123456")])
+                with BreachStore() as store:  # intact: answers as before
+                    self.assertTrue(store.contains("password1"))
+                damage()
+                if name in index_damage:
+                    with self.assertRaisesRegex(VaultError, "damaged"):
+                        BreachStore()
+                    continue
+                with BreachStore() as store:
+                    with self.assertRaisesRegex(VaultError, "damaged"):
+                        store.contains("password1")
+                    self.assertTrue(store.contains("123456"))  # other ranges still check out
+
+    def test_format_1_store_is_outdated(self):
+        self.import_hashes([sha1("password1")])
+        meta = self.live() / "meta.json"
+        meta.write_text(meta.read_text().replace('"format": 2', '"format": 1'))
+        (self.live() / "crc.bin").unlink()  # like a real format 1 store, which never had one
+        with self.assertRaisesRegex(VaultError, "older version of pwvault — run `pwvault breach update`"):
+            BreachStore()
+
+    def test_bad_hash_count_in_meta_is_damage(self):
+        for bad in ("null", '"12"', "-1", "true", "1.5"):
+            with self.subTest(hashes=bad):
+                shutil.rmtree(pwvault.breach_dir(), ignore_errors=True)
+                self.import_hashes([sha1("password1")])
+                meta = self.live() / "meta.json"
+                meta.write_text(re.sub(r'"hashes": \d+', f'"hashes": {bad}', meta.read_text()))
+                with self.assertRaisesRegex(VaultError, "damaged"):
+                    BreachStore()
 
     def test_old_store_answers_until_a_rebuild_finishes(self):
         self.import_hashes([sha1("password1")])
@@ -172,6 +233,17 @@ class StoreTests(BreachBase):
                 self.assertRaisesRegex(VaultError, r"needs about 16 GB free .*\(1\.0 GB free\)"):
             pwvault.update_breach_list(lambda p: self.fail("fetched despite no space"))
 
+    def test_import_needs_only_room_for_its_file(self):
+        def free(gb):
+            return patch.object(pwvault.shutil, "disk_usage", return_value=type("Usage", (), {"free": gb})())
+        with patch.object(pwvault, "PWNED_MIN_FREE", 20 << 30):
+            with free(3 << 30):
+                self.assertEqual(self.import_hashes([sha1("password1")]), 1)  # small file, 3 GB free
+                with self.assertRaisesRegex(VaultError, r"needs about 20 GB free"):
+                    pwvault.update_breach_list(lambda p: self.fail("fetched despite no space"))
+            with free(1 << 20), self.assertRaisesRegex(VaultError, r"needs about 0\.06\d* GB free .*\(0\.0 GB free\)"):
+                self.import_hashes([sha1("123456")])  # below file size + 64 MB
+
 
 class FetchTests(unittest.TestCase):
     """fetch_range() against a stand-in for urlopen: what it asks for and how it reads the reply."""
@@ -194,6 +266,53 @@ class FetchTests(unittest.TestCase):
                 self.assertEqual(req.full_url, "https://api.pwnedpasswords.com/range/0A1B2")
                 self.assertEqual(req.get_header("Accept-encoding"), "gzip")
                 self.assertTrue(req.get_header("User-agent").startswith("pwvault-manager/"))
+
+    def test_every_gzip_member_is_read(self):
+        first, second = b"0" * 35 + b":3\r\n", b"1" * 35 + b":5\r\n"
+        reply = gzip.compress(first) + gzip.compress(second)  # two gzip members, one range
+        with patch.object(pwvault.urllib.request, "urlopen", return_value=self.reply(reply, "gzip")):
+            self.assertEqual(pwvault.fetch_range("00000"), first + second)
+        cut = gzip.compress(first) + gzip.compress(second)[:-6]  # second member cut off
+        with patch.object(pwvault.urllib.request, "urlopen", return_value=self.reply(cut, "gzip")), \
+                self.assertRaisesRegex(VaultError, "range 00000 arrived damaged"):
+            pwvault.fetch_range("00000")
+
+    def test_reply_cut_at_a_member_boundary_is_refused(self):
+        first = sha1("first").encode()[5:] + b":3\r\n"  # hex: compresses worse than it reads
+        member = gzip.compress(first)
+        cap = len(member) - 1  # reading cap + 1 bytes stops exactly after the first member
+        self.assertLessEqual(len(first), cap)
+        reply = member + gzip.compress(sha1("second").encode()[5:] + b":5\r\n")
+        with patch.object(pwvault, "PWNED_MAX_RANGE", cap), \
+                patch.object(pwvault.urllib.request, "urlopen", return_value=self.reply(reply, "gzip")), \
+                self.assertRaisesRegex(VaultError, "range 00000 is far larger than any real range"):
+            pwvault.fetch_range("00000")
+
+    def test_oversized_reply_is_refused(self):
+        huge = b"0" * 35 + b":3\r\n"
+        huge = huge * (pwvault.PWNED_MAX_RANGE // len(huge) + 2)
+        for reply, encoding in ((huge, ""), (gzip.compress(huge), "gzip")):  # the gzip one is a small bomb
+            with self.subTest(encoding=encoding or "none"), \
+                    patch.object(pwvault.urllib.request, "urlopen", return_value=self.reply(reply, encoding)), \
+                    self.assertRaisesRegex(VaultError, "range 00000 is far larger than any real range"):
+                pwvault.fetch_range("00000")
+
+    def test_reply_shorter_than_its_length_is_refused(self):
+        whole = b"0" * 35 + b":3\r\n" + b"1" * 35 + b":5\r\n"
+        cut = whole[:len(whole) // 2]  # ends right after the first, valid record
+        gz = gzip.compress(b"0" * 35 + b":3\r\n") + gzip.compress(b"1" * 35 + b":5\r\n")
+        gz_cut = gzip.compress(b"0" * 35 + b":3\r\n")  # cut between two gzip members
+        for reply, length, encoding in ((cut, len(whole), ""), (gz_cut, len(gz), "gzip"), (whole, "x1", "")):
+            r = self.reply(reply, encoding)
+            r.headers = dict(r.headers, **{"Content-Length": str(length)})
+            with self.subTest(encoding=encoding or "none", length=length), \
+                    patch.object(pwvault.urllib.request, "urlopen", return_value=r), \
+                    self.assertRaisesRegex(VaultError, "range 00000 arrived incomplete"):
+                pwvault.fetch_range("00000")
+        r = self.reply(whole)
+        r.headers = {"Content-Length": str(len(whole))}
+        with patch.object(pwvault.urllib.request, "urlopen", return_value=r):
+            self.assertEqual(pwvault.fetch_range("00000"), whole)
 
     def test_damaged_gzip_is_an_error(self):
         with patch.object(pwvault.urllib.request, "urlopen", return_value=self.reply(b"not gzip", "gzip")), \
@@ -300,6 +419,8 @@ class DownloadTests(SmallRanges):
             f.write(b"\xff" * pwvault.PWNED_RECORD * 3)
         with open(partial / "index.bin", "ab") as f:
             f.write(b"\x01\x02\x03")  # half an offset
+        with open(partial / "crc.bin", "ab") as f:
+            f.write(b"\xee" * 4 * 3)  # CRCs of ranges the index doesn't count yet
         pwvault.update_breach_list(self.fetch)
         self.assertEqual(self.store_files(), expected)
 
@@ -369,6 +490,20 @@ class CheckTests(BreachBase):
         self.assertNotIn("Leaked site", out)
         self.assertIn("3 of 5 entries flagged (0 breached, 2 reused, 1 weak)", out)
         self.assertIn("Breached passwords not checked: no breach list yet — run `pwvault breach update`", out)
+
+    def test_cli_check_with_a_damaged_store(self):
+        path = self.make_vault()
+        self.import_hashes([sha1(BREACHED)])
+        live = Path(os.path.realpath(pwvault.breach_dir() / "current"))
+        r = int(sha1(BREACHED)[:5], 16)
+        start = struct.unpack_from("<Q", (live / "index.bin").read_bytes(), r * 8)[0]
+        with open(live / "hashes.bin", "r+b") as f:  # the breached hash's record no longer matches
+            f.seek(start * pwvault.PWNED_RECORD)
+            f.write(b"\x00" * pwvault.PWNED_RECORD)
+        out = self.run_check(path)
+        self.assertNotIn("Leaked site", out)
+        self.assertIn("3 of 5 entries flagged (0 breached, 2 reused, 1 weak)", out)
+        self.assertIn("Breached passwords not checked: the breach list is damaged — run `pwvault breach update`", out)
 
     def run_breach(self, *argv) -> str:
         out = io.StringIO()
