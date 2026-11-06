@@ -1607,9 +1607,13 @@ def fetch_range(prefix: str) -> bytes:
         "User-Agent": f"pwvault-manager/{__version__}", "Accept-Encoding": "gzip"})
     with urllib.request.urlopen(req, timeout=30) as r:
         body, encoding = r.read(PWNED_MAX_RANGE + 1), r.headers.get("Content-Encoding", "")
+        declared = r.headers.get("Content-Length")
     too_large = VaultError(f"range {prefix} is far larger than any real range")
     if len(body) > PWNED_MAX_RANGE:  # before gunzip: a cut could fall between gzip members
         raise too_large
+    # http.client returns a reply cut short by a closed connection without an error.
+    if declared is not None and (not declared.isdigit() or len(body) != int(declared)):
+        raise VaultError(f"range {prefix} arrived incomplete")
     if encoding == "gzip":
         body = _gunzip_capped(body, prefix)
     if len(body) > PWNED_MAX_RANGE:

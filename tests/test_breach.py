@@ -297,6 +297,23 @@ class FetchTests(unittest.TestCase):
                     self.assertRaisesRegex(VaultError, "range 00000 is far larger than any real range"):
                 pwvault.fetch_range("00000")
 
+    def test_reply_shorter_than_its_length_is_refused(self):
+        whole = b"0" * 35 + b":3\r\n" + b"1" * 35 + b":5\r\n"
+        cut = whole[:len(whole) // 2]  # ends right after the first, valid record
+        gz = gzip.compress(b"0" * 35 + b":3\r\n") + gzip.compress(b"1" * 35 + b":5\r\n")
+        gz_cut = gzip.compress(b"0" * 35 + b":3\r\n")  # cut between two gzip members
+        for reply, length, encoding in ((cut, len(whole), ""), (gz_cut, len(gz), "gzip"), (whole, "x1", "")):
+            r = self.reply(reply, encoding)
+            r.headers = dict(r.headers, **{"Content-Length": str(length)})
+            with self.subTest(encoding=encoding or "none", length=length), \
+                    patch.object(pwvault.urllib.request, "urlopen", return_value=r), \
+                    self.assertRaisesRegex(VaultError, "range 00000 arrived incomplete"):
+                pwvault.fetch_range("00000")
+        r = self.reply(whole)
+        r.headers = {"Content-Length": str(len(whole))}
+        with patch.object(pwvault.urllib.request, "urlopen", return_value=r):
+            self.assertEqual(pwvault.fetch_range("00000"), whole)
+
     def test_damaged_gzip_is_an_error(self):
         with patch.object(pwvault.urllib.request, "urlopen", return_value=self.reply(b"not gzip", "gzip")), \
                 self.assertRaisesRegex(VaultError, "range 0A1B2 arrived damaged"):

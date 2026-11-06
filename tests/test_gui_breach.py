@@ -108,7 +108,11 @@ class CheckDialogTests(BreachBase):
         d = self.dialog()
         note = next(t for t in widget_texts(d) if t.startswith("Breached passwords not checked."))
         self.assertIn("damaged", note)
-        self.assertEqual([r[0] for r in self.rows(d)], ["Mail", "Forum", "Router"])  # no "Leaked site"
+        self.assertEqual(self.rows(d), [  # no "Leaked site" row
+            ("Mail", "me@work", "Root/Work", "reused with Forum"),
+            ("Forum", "me", "Root", "reused with Mail"),
+            ("Router", "admin", "Root", "weak"),
+        ])
         d.destroy()
 
     def assert_jumped_to(self, d, entry):
