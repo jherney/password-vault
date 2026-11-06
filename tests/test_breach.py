@@ -277,6 +277,17 @@ class FetchTests(unittest.TestCase):
                 self.assertRaisesRegex(VaultError, "range 00000 arrived damaged"):
             pwvault.fetch_range("00000")
 
+    def test_reply_cut_at_a_member_boundary_is_refused(self):
+        first = sha1("first").encode()[5:] + b":3\r\n"  # hex: compresses worse than it reads
+        member = gzip.compress(first)
+        cap = len(member) - 1  # reading cap + 1 bytes stops exactly after the first member
+        self.assertLessEqual(len(first), cap)
+        reply = member + gzip.compress(sha1("second").encode()[5:] + b":5\r\n")
+        with patch.object(pwvault, "PWNED_MAX_RANGE", cap), \
+                patch.object(pwvault.urllib.request, "urlopen", return_value=self.reply(reply, "gzip")), \
+                self.assertRaisesRegex(VaultError, "range 00000 is far larger than any real range"):
+            pwvault.fetch_range("00000")
+
     def test_oversized_reply_is_refused(self):
         huge = b"0" * 35 + b":3\r\n"
         huge = huge * (pwvault.PWNED_MAX_RANGE // len(huge) + 2)
