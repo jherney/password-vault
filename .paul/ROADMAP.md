@@ -14,7 +14,7 @@ Close the gaps that keep pwvault from being a daily-driver password manager, wit
 
 **v1.4 Daily-driver gaps** (v1.4.0)
 Status: 🚧 In progress
-Phases: 2 of 4 complete (50%)
+Phases: 3 of 4 complete (75%)
 
 Constraints for every phase:
 - Stays on pykeepass; no custom crypto, no new vault format. A vault written by any phase must still open in KeePassXC.
@@ -27,7 +27,7 @@ Constraints for every phase:
 |-------|------|-------|--------|-----------|
 | 6 | Vault merge | 2/2 | ✅ Complete | 2026-11-05 |
 | 7 | YubiKey unlock | 2/2 | ✅ Complete | 2026-11-05 |
-| 8 | Offline breach check | 2/3 | In progress | - |
+| 8 | Offline breach check | 3/3 | ✅ Complete | 2026-11-05 |
 | 9 | Browser autofill | TBD | Not started | - |
 
 ## Phase Details
@@ -68,7 +68,7 @@ Constraints for every phase:
 
 **Open item:** first use with a physical YubiKey and `keepassxc-cli -y` (07-01 AC-5)
 
-### Phase 8: Offline breach check
+### Phase 8: Offline breach check ✅
 
 **Goal:** `pwvault check` lists entries whose passwords appear in known breaches, without sending any password or hash prefix over the network during the check
 **Depends on:** Nothing (independent of Phases 6–7)
@@ -83,7 +83,9 @@ Constraints for every phase:
 **Plans:**
 - [x] 08-01 (AC-5 real download deferred): compact HIBP store (download with resume, import, lookup), `pwvault check` (breached, reused, weak), `pwvault breach update|import|status`
 - [x] 08-02: GUI Database > Check passwords… report; double-click selects the entry in the main window
-- [ ] 08-03: breach-store integrity (index SHA-256, per-range CRC32), note and import free-space leftovers, phase `/cso` on 08-01 and 08-02
+- [x] 08-03: breach-store integrity (index SHA-256, per-range CRC32), note and import free-space leftovers, phase `/cso` on 08-01 and 08-02 (no supported findings; download size capped)
+
+**Open item:** first real `pwvault breach update` against HIBP (08-01 AC-5)
 
 ### Phase 9: Browser autofill
 
@@ -107,4 +109,4 @@ Phases 1–5: safe saves and backups, TOTP codes, GUI polish, security review, p
 
 ---
 *Roadmap created: 2026-10-30*
-*Last updated: 2026-11-05 — Phase 7 complete*
+*Last updated: 2026-11-05 — Phase 8 complete*
