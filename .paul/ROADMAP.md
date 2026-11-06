@@ -83,7 +83,7 @@ Constraints for every phase:
 **Plans:**
 - [x] 08-01 (AC-5 real download deferred): compact HIBP store (download with resume, import, lookup), `pwvault check` (breached, reused, weak), `pwvault breach update|import|status`
 - [x] 08-02: GUI Database > Check passwords… report; double-click selects the entry in the main window
-- [ ] 08-03: phase `/cso` on 08-01 and 08-02
+- [ ] 08-03: breach-store integrity (index SHA-256, per-range CRC32), note and import free-space leftovers, phase `/cso` on 08-01 and 08-02
 
 ### Phase 9: Browser autofill
 

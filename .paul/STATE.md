@@ -16,10 +16,10 @@ See: .paul/PROJECT.md (updated 2026-11-05)
 ## Current Position
 
 Milestone: v1.4 Daily-driver gaps
-Phase: 8 of 6–9 (Offline breach check) — In progress (2 of 3 plans)
-Plan: 08-02 complete; 08-03 (phase /cso) not yet planned
-Status: Loop closed, ready for next PLAN
-Last activity: 2026-11-05 — Unified 08-02 (.paul/phases/08-breach-check/08-02-SUMMARY.md)
+Phase: 8 of 6–9 (Offline breach check) — Planning (plan 3 of 3)
+Plan: 08-03 created, awaiting approval
+Status: PLAN created, ready for APPLY
+Last activity: 2026-11-05 — Created .paul/phases/08-breach-check/08-03-PLAN.md
 
 Progress:
 - v1.3 Hardening, TOTP, Backups & Release: [██████████] 100% ✓ (released 2026-11-05)
@@ -31,7 +31,7 @@ Progress:
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ✓        ✓        ✓     [Loop complete - ready for next PLAN]
+  ✓        ○        ○     [Plan created, awaiting approval]
 ```
 
 ## Accumulated Context
@@ -55,6 +55,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | 2026-11-05: Phase 8 in two plans (08-01 store + CLI, 08-02 GUI); breach store keeps 6-byte hash suffixes, no counts (~16 GB for ~2.6 billion hashes) | Phase 8 | Reports "found in breaches" only; ~1 in 10^11 false-match odds |
 | 2026-11-05: Breach list lives in `$XDG_CACHE_HOME/pwvault/pwned` (re-downloadable), made live by an atomic `current` symlink swap; 08-01 AC-5 (real download) deferred by the user | Phase 8 | 08-02 reuses `check_vault()`; first real download is an open item |
 | 2026-11-05: Phase 8 split into three plans: 08-02 GUI report (double-click closes it and selects the entry in the main window), 08-03 phase /cso | Phase 8 | /cso reviews 08-01 and 08-02 together |
+| 2026-11-05: Breach store format 2: SHA-256 of index.bin checked on open, CRC32 per range checked on lookup; format 1 reported as outdated (no migration, no real store exists). 08-03 also fixes the note and import free-space leftovers | Phase 8 | A damaged list is reported instead of missing breaches |
 | 2026-11-05: Every move stamps LocationChanged and every permanent delete writes DeletedObjects (pykeepass does neither) | Phase 6 | Moves and deletions made in pwvault carry over in merges here and in KeePassXC; deletions made with 1.3 or earlier were not recorded |
 
 ### Deferred Issues
@@ -67,6 +68,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 - Phase 7 (07-01): AC-5 real-YubiKey check with keepassxc-cli -y; `[yubikey]` extra needs pcsc-lite-devel to build pyscard
 - Phase 8 (08-01): AC-5 real `pwvault breach update` against the HIBP API (with a Ctrl+C and resume), `breach status`, and `check` on the real vault
 - Phase 8 (08-02): no-list note shows the shared error's literal backticks and wraps mid-command (approved as-is); `breach import` applies the 20 GB free-space floor to small files
+- Phase 8 (08-03 input): breach store has no integrity check beyond file sizes; a corrupted index.bin offset can make a range look empty, so `check` silently misses breached hashes. CodeRabbit (PR #9, Major) suggests checksums recorded at build and verified on open, keeping existing stores usable
 - Phase 6 (06-01): deletions made with pwvault ≤ 1.3 not recorded (reappear on first merge); Meta HistoryMaxItems/HistoryMaxSize not read; database CustomData not merged (revisit in Phase 9); KDBX3↔4 time re-encoding untested
 - Phase 4 (04-01): F-15 no lock file for dependencies; deferred to Phase 5 before any publish workflow. CI pins (F-11) and dependency minimums (F-12, F-14) fixed after the second CSO run
 
@@ -80,16 +82,15 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 ### Git State
 
-Last commit: bfc73a5 (merge of PR #8: 08-01 breach check + review fixes), on main, pushed; breach-check deleted
-Branch breach-gui: 08-02 work uncommitted
+Last commit: 3b0d2ce (merge of PR #9: 08-02 GUI report + focus fix), on main, pushed; breach-gui deleted
 Uncommitted: `.gstack/` and `pwvault.keyx` (both intentionally not committed)
 
 ## Session Continuity
 
 Last session: 2026-11-05
-Stopped at: 08-02 unified (loop closed)
-Next action: commit 08-02 on breach-gui (PR), then /paul:plan for 08-03 (phase /cso)
-Resume file: .paul/phases/08-breach-check/08-02-SUMMARY.md
+Stopped at: Plan 08-03 created
+Next action: Review and approve plan, then run /paul:apply .paul/phases/08-breach-check/08-03-PLAN.md
+Resume file: .paul/phases/08-breach-check/08-03-PLAN.md
 
 ---
 *STATE.md — Updated after every significant action*
