@@ -267,6 +267,16 @@ class FetchTests(unittest.TestCase):
                 self.assertEqual(req.get_header("Accept-encoding"), "gzip")
                 self.assertTrue(req.get_header("User-agent").startswith("pwvault-manager/"))
 
+    def test_every_gzip_member_is_read(self):
+        first, second = b"0" * 35 + b":3\r\n", b"1" * 35 + b":5\r\n"
+        reply = gzip.compress(first) + gzip.compress(second)  # two gzip members, one range
+        with patch.object(pwvault.urllib.request, "urlopen", return_value=self.reply(reply, "gzip")):
+            self.assertEqual(pwvault.fetch_range("00000"), first + second)
+        cut = gzip.compress(first) + gzip.compress(second)[:-6]  # second member cut off
+        with patch.object(pwvault.urllib.request, "urlopen", return_value=self.reply(cut, "gzip")), \
+                self.assertRaisesRegex(VaultError, "range 00000 arrived damaged"):
+            pwvault.fetch_range("00000")
+
     def test_oversized_reply_is_refused(self):
         huge = b"0" * 35 + b":3\r\n"
         huge = huge * (pwvault.PWNED_MAX_RANGE // len(huge) + 2)

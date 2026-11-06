@@ -1608,16 +1608,28 @@ def fetch_range(prefix: str) -> bytes:
     with urllib.request.urlopen(req, timeout=30) as r:
         body, encoding = r.read(PWNED_MAX_RANGE + 1), r.headers.get("Content-Encoding", "")
     if encoding == "gzip":
-        unpacker = zlib.decompressobj(wbits=31)  # gzip framing; output capped like the reply itself
-        try:
-            body, complete = unpacker.decompress(body, PWNED_MAX_RANGE + 1), unpacker.eof
-        except zlib.error:
-            raise VaultError(f"range {prefix} arrived damaged")
-        if not complete and len(body) <= PWNED_MAX_RANGE:
-            raise VaultError(f"range {prefix} arrived damaged")
+        body = _gunzip_capped(body, prefix)
     if len(body) > PWNED_MAX_RANGE:
         raise VaultError(f"range {prefix} is far larger than any real range")
     return body
+
+
+def _gunzip_capped(data: bytes, prefix: str) -> bytes:
+    """Every gzip member in data (a reply may hold several, as gzip.decompress allows), stopping
+    once the text passes PWNED_MAX_RANGE. A cut-off or corrupt member is an error."""
+    out = b""
+    while data and len(out) <= PWNED_MAX_RANGE:
+        member = zlib.decompressobj(wbits=31)  # gzip framing
+        try:
+            out += member.decompress(data, PWNED_MAX_RANGE + 1 - len(out))
+        except zlib.error:
+            raise VaultError(f"range {prefix} arrived damaged")
+        if len(out) > PWNED_MAX_RANGE:
+            break  # the caller refuses it as too large
+        if not member.eof:
+            raise VaultError(f"range {prefix} arrived damaged")
+        data = member.unused_data
+    return out
 
 
 def _fetch_checked(prefix: str, fetch) -> bytes:
