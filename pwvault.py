@@ -1823,26 +1823,29 @@ class BreachStore:
             raise VaultError("no breach list yet — run `pwvault breach update`")
         store = Path(os.path.realpath(root / "current"))  # resolve once: a later swap can't mix stores
         try:
-            self.meta = json.loads((store / "meta.json").read_text())
-            self._hashes = os.open(store / "hashes.bin", os.O_RDONLY)
-            self._index = os.open(store / "index.bin", os.O_RDONLY)
-            self._crc = os.open(store / "crc.bin", os.O_RDONLY)
-            problem = self._check(store)
+            problem = self._open(store)
         except (OSError, ValueError):
             problem = self.DAMAGED
         if problem:
             self.close()
             raise VaultError(problem)
 
-    def _check(self, store: Path) -> str | None:
-        """Why this store can't be used, or None."""
-        meta = self.meta
-        if isinstance(meta, dict) and meta.get("format") == 1:
+    def _open(self, store: Path) -> str | None:
+        """Read meta.json, then open and check the data files. Why this store can't be used, or None."""
+        meta = self.meta = json.loads((store / "meta.json").read_text())
+        if not isinstance(meta, dict):
+            return self.DAMAGED
+        if meta.get("format") == 1:  # checked first: format 1 has no crc.bin to open
             return self.OUTDATED
-        if (not isinstance(meta, dict) or meta.get("format") != PWNED_FORMAT
-                or os.fstat(self._index).st_size != (PWNED_RANGES + 1) * 8
+        hashes = meta.get("hashes")
+        if meta.get("format") != PWNED_FORMAT or type(hashes) is not int or hashes < 0:
+            return self.DAMAGED
+        self._hashes = os.open(store / "hashes.bin", os.O_RDONLY)
+        self._index = os.open(store / "index.bin", os.O_RDONLY)
+        self._crc = os.open(store / "crc.bin", os.O_RDONLY)
+        if (os.fstat(self._index).st_size != (PWNED_RANGES + 1) * 8
                 or os.fstat(self._crc).st_size != PWNED_RANGES * 4
-                or os.fstat(self._hashes).st_size != meta.get("hashes", -1) * PWNED_RECORD
+                or os.fstat(self._hashes).st_size != hashes * PWNED_RECORD
                 or _file_sha256(store / "index.bin") != meta.get("index_sha256")):
             return self.DAMAGED
         return None

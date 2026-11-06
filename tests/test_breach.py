@@ -10,6 +10,7 @@ import http.client
 import io
 import os
 import random
+import re
 import shutil
 import struct
 import sys
@@ -194,8 +195,19 @@ class StoreTests(BreachBase):
         self.import_hashes([sha1("password1")])
         meta = self.live() / "meta.json"
         meta.write_text(meta.read_text().replace('"format": 2', '"format": 1'))
+        (self.live() / "crc.bin").unlink()  # like a real format 1 store, which never had one
         with self.assertRaisesRegex(VaultError, "older version of pwvault — run `pwvault breach update`"):
             BreachStore()
+
+    def test_bad_hash_count_in_meta_is_damage(self):
+        for bad in ("null", '"12"', "-1", "true", "1.5"):
+            with self.subTest(hashes=bad):
+                shutil.rmtree(pwvault.breach_dir(), ignore_errors=True)
+                self.import_hashes([sha1("password1")])
+                meta = self.live() / "meta.json"
+                meta.write_text(re.sub(r'"hashes": \d+', f'"hashes": {bad}', meta.read_text()))
+                with self.assertRaisesRegex(VaultError, "damaged"):
+                    BreachStore()
 
     def test_old_store_answers_until_a_rebuild_finishes(self):
         self.import_hashes([sha1("password1")])
