@@ -255,6 +255,15 @@ class FetchTests(unittest.TestCase):
                 self.assertEqual(req.get_header("Accept-encoding"), "gzip")
                 self.assertTrue(req.get_header("User-agent").startswith("pwvault-manager/"))
 
+    def test_oversized_reply_is_refused(self):
+        huge = b"0" * 35 + b":3\r\n"
+        huge = huge * (pwvault.PWNED_MAX_RANGE // len(huge) + 2)
+        for reply, encoding in ((huge, ""), (gzip.compress(huge), "gzip")):  # the gzip one is a small bomb
+            with self.subTest(encoding=encoding or "none"), \
+                    patch.object(pwvault.urllib.request, "urlopen", return_value=self.reply(reply, encoding)), \
+                    self.assertRaisesRegex(VaultError, "range 00000 is far larger than any real range"):
+                pwvault.fetch_range("00000")
+
     def test_damaged_gzip_is_an_error(self):
         with patch.object(pwvault.urllib.request, "urlopen", return_value=self.reply(b"not gzip", "gzip")), \
                 self.assertRaisesRegex(VaultError, "range 0A1B2 arrived damaged"):

@@ -26,7 +26,6 @@ import concurrent.futures
 import csv
 import fcntl
 import getpass
-import gzip
 import hashlib
 import hmac
 import html
@@ -1569,6 +1568,7 @@ PWNED_RECORD = 6  # bytes kept per hash after the 5-hex prefix
 PWNED_BATCH = 4096  # ranges fetched, written and fsynced together; a resume restarts here
 PWNED_WORKERS = 16
 PWNED_TRIES = 5
+PWNED_MAX_RANGE = 4 << 20  # a real range is ~100 KB; a far larger reply is refused, not buffered
 PWNED_MIN_FREE = 20 << 30  # the full list is ~16 GB in this format (~2,500 hashes per range)
 PWNED_FORMAT = 2  # 2 added crc.bin and meta's index_sha256
 PWNED_INDEX_MARGIN = 64 << 20  # index.bin (8 MB) and crc.bin (4 MB), with room to spare
@@ -1606,12 +1606,17 @@ def fetch_range(prefix: str) -> bytes:
     req = urllib.request.Request(PWNED_API + prefix, headers={
         "User-Agent": f"pwvault-manager/{__version__}", "Accept-Encoding": "gzip"})
     with urllib.request.urlopen(req, timeout=30) as r:
-        body, encoding = r.read(), r.headers.get("Content-Encoding", "")
+        body, encoding = r.read(PWNED_MAX_RANGE + 1), r.headers.get("Content-Encoding", "")
     if encoding == "gzip":
+        unpacker = zlib.decompressobj(wbits=31)  # gzip framing; output capped like the reply itself
         try:
-            return gzip.decompress(body)
-        except (OSError, EOFError, zlib.error):
+            body, complete = unpacker.decompress(body, PWNED_MAX_RANGE + 1), unpacker.eof
+        except zlib.error:
             raise VaultError(f"range {prefix} arrived damaged")
+        if not complete and len(body) <= PWNED_MAX_RANGE:
+            raise VaultError(f"range {prefix} arrived damaged")
+    if len(body) > PWNED_MAX_RANGE:
+        raise VaultError(f"range {prefix} is far larger than any real range")
     return body
 
 
