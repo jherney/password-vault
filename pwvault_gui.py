@@ -792,6 +792,7 @@ class CheckDialog(Dialog):
     pwvault.check_vault()). Show entry closes the report and selects the entry in the main window."""
 
     UPDATE_HINT = "That command runs in a terminal and downloads about 55 GB once."
+    UPDATE_COMMAND = "pwvault\u00a0breach\u00a0update"  # non-breaking spaces: never split across lines
 
     def __init__(self, app):
         super().__init__(app, "Check passwords")
@@ -801,7 +802,7 @@ class CheckDialog(Dialog):
             note = ""
         except VaultError as err:
             findings = pwvault.check_vault(app.vault)
-            note = f"Breached passwords not checked. {sentence(err)} {self.UPDATE_HINT}"
+            note = f"Breached passwords not checked. {self.as_note(err)} {self.UPDATE_HINT}"
         self.findings = {str(i): f for i, f in enumerate(findings)}
         b = self.body
         ttk.Label(b, text=self.summary(findings, len(pwvault.checked_entries(app.vault)))).pack(anchor="w")
@@ -832,6 +833,11 @@ class CheckDialog(Dialog):
         # Take the keyboard even if the window manager left it on the main window, so Return and
         # Escape reach this modal report without a click first.
         (self.tree if findings else self).focus_force()
+
+    @classmethod
+    def as_note(cls, err) -> str:
+        """The store's error as GUI text: the CLI's `backticks` dropped, the command kept on one line."""
+        return sentence(err).replace("`", "").replace("pwvault breach update", cls.UPDATE_COMMAND)
 
     @staticmethod
     def summary(findings, checked) -> str:

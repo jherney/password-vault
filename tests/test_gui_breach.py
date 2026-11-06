@@ -6,7 +6,9 @@ opened with sockets disabled.
 """
 
 import os
+import struct
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from test_breach import BREACHED, PW, SHARED, WEAK, BreachBase, make_check_vault, sha1
@@ -80,7 +82,8 @@ class CheckDialogTests(BreachBase):
         d = self.dialog()
         self.assertEqual([r[0] for r in self.rows(d)], ["Mail", "Forum", "Router"])
         note = next(t for t in widget_texts(d) if t.startswith("Breached passwords not checked."))
-        self.assertIn("pwvault breach update", note)
+        self.assertIn("pwvault\u00a0breach\u00a0update", note)  # one unbreakable piece
+        self.assertNotIn("`", note)
         self.assertIn("3 of 5 entries flagged (0 breached, 2 reused, 1 weak).", widget_texts(d))
         d.destroy()
 
@@ -92,6 +95,20 @@ class CheckDialogTests(BreachBase):
         note = next(t for t in widget_texts(d) if t.startswith("Breached passwords not checked."))
         self.assertIn("damaged", note)
         self.assertEqual([r[0] for r in self.rows(d)], ["Mail", "Forum", "Router"])
+        d.destroy()
+
+    def test_breach_list_damaged_during_lookup(self):
+        self.import_hashes([sha1(BREACHED)])
+        live = Path(os.path.realpath(pwvault.breach_dir() / "current"))
+        r = int(sha1(BREACHED)[:5], 16)
+        start = struct.unpack_from("<Q", (live / "index.bin").read_bytes(), r * 8)[0]
+        with open(live / "hashes.bin", "r+b") as f:  # opens fine; that range's CRC no longer matches
+            f.seek(start * pwvault.PWNED_RECORD)
+            f.write(b"\x00" * pwvault.PWNED_RECORD)
+        d = self.dialog()
+        note = next(t for t in widget_texts(d) if t.startswith("Breached passwords not checked."))
+        self.assertIn("damaged", note)
+        self.assertEqual([r[0] for r in self.rows(d)], ["Mail", "Forum", "Router"])  # no "Leaked site"
         d.destroy()
 
     def assert_jumped_to(self, d, entry):

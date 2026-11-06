@@ -185,7 +185,8 @@ python3 pwvault.py check
 - **Nothing about your passwords is sent.** `breach update` downloads every one of the list's 1,048,576 ranges, the same for everyone, and `check` makes no network connections at all.
 - **Size.** The list is stored compactly in `~/.cache/pwvault/pwned/` (or `$XDG_CACHE_HOME/pwvault/pwned/`), outside the vault's folder: about 16 GB for the ~2.6 billion hashes, keeping the first 68 bits of each SHA-1 hash. A false "breached" result is about 1 in 100 billion per password. How often a password was seen is not kept.
 - **Interrupted downloads resume.** Press Ctrl+C or lose the connection and run `breach update` again; it continues from the last finished batch. A damaged or unexpected response is retried and never stored. While an update runs, `check` keeps using the previous complete list.
-- **Already have the list?** `breach import FILE` builds the store from a `HASH:COUNT` text file sorted by hash, such as the output of HIBP's [PwnedPasswordsDownloader](https://github.com/HaveIBeenPwned/PwnedPasswordsDownloader).
+- **Damage is detected, not guessed around.** The list's index is checked against a SHA-256 recorded when it was built, and each range against its own CRC32 when it is read. A damaged list makes `check` say so (and still report reused and weak passwords) instead of quietly finding fewer breaches; `breach update` rebuilds it. Lists made by pwvault before this check are reported as outdated the same way.
+- **Already have the list?** `breach import FILE` builds the store from a `HASH:COUNT` text file sorted by hash (it needs only about the file's size free, not 20 GB), such as the output of HIBP's [PwnedPasswordsDownloader](https://github.com/HaveIBeenPwned/PwnedPasswordsDownloader).
 
 Without a downloaded list, `check` still reports reused and weak passwords and says how to get the list.
 
